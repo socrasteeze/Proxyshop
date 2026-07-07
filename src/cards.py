@@ -3,6 +3,7 @@
 * Handles raw card data fetching and processing
 """
 # Standard Library Imports
+import os
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional, Union, TypedDict, Any
@@ -53,6 +54,32 @@ class FrameDetails(TypedDict):
 * Handling Data Requests
 """
 
+# Lazily initialized local card cache (see PROXYSHOP_CARD_CACHE below)
+_CARD_DB = None
+
+
+def _get_card_cache():
+    """Returns the local card DB when caching is enabled, otherwise None.
+
+    Modes via PROXYSHOP_CARD_CACHE env var:
+        'off' (default)  — always use the live Scryfall API (original behavior).
+        'cache_first'    — check the local DB first, fall back to the API and
+                           store fetched results for next time.
+        'cache_only'     — never touch the network (requires a bulk import).
+    Database location via PROXYSHOP_CARD_DB (default: data/cards.db in CWD).
+    """
+    global _CARD_DB
+    mode = os.environ.get('PROXYSHOP_CARD_CACHE', 'off').lower()
+    if mode not in ('cache_first', 'cache_only'):
+        return None
+    if _CARD_DB is None:
+        # Deferred import: web/ is a sibling package shipped with the repo
+        from web.shared.carddb import CardDB
+        _CARD_DB = CardDB(
+            os.environ.get('PROXYSHOP_CARD_DB', 'data/cards.db'),
+            offline=(mode == 'cache_only'))
+    return _CARD_DB
+
 
 def get_card_data(card: CardDetails, cfg: AppConfig, logger: Optional[Any] = None) -> Optional[dict]:
     """Fetch card data from the Scryfall API.
@@ -78,6 +105,26 @@ def get_card_data(card: CardDetails, cfg: AppConfig, logger: Optional[Any] = Non
         'include_extras': str(cfg.scry_extras),
     } if not number else {}
 
+    # Check the local card cache first, if enabled
+    cache = _get_card_cache()
+    if cache is not None:
+        with suppress(Exception):
+            cached = cache._cache_only(
+                lambda: cache.get_card(code, number, cfg.lang)
+                if number else cache.find_card(name, code or None, cfg.lang))
+            if cached:
+                return cached
+        if cache.offline:
+            # 'cache_only' mode: never fall through to the live API
+            return
+
+    def _finish(data: dict) -> dict:
+        """Store an API result in the local cache before returning it."""
+        if cache is not None and isinstance(data, dict):
+            with suppress(Exception):
+                cache.store_card(data)
+        return data
+
     # Establish Scryfall fetch action
     action = scryfall.get_card_unique if number else scryfall.get_card_search
     params = [code, number] if number else [name, code]
@@ -88,7 +135,7 @@ def get_card_data(card: CardDetails, cfg: AppConfig, logger: Optional[Any] = Non
         # Pull the alternate language card
         with suppress(Exception):
             data = action(*params, lang=cfg.lang, **kwargs)
-            return data
+            return _finish(data)
         # Language couldn't be found
         if logger:
             logger.update(msg_warn(f'Reverting to English: [b]{name}[/b]'))
@@ -96,13 +143,13 @@ def get_card_data(card: CardDetails, cfg: AppConfig, logger: Optional[Any] = Non
     # Query the card in English, retry with extras if failed
     with suppress(Exception):
         data = action(*params, **kwargs)
-        return data
+        return _finish(data)
     if not number and not cfg.scry_extras:
         # Retry with extras included, case: Planar cards
         with suppress(Exception):
             kwargs['include_extras'] = 'True'
             data = action(*params, **kwargs)
-            return data
+            return _finish(data)
     return
 
 

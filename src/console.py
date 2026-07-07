@@ -340,6 +340,14 @@ class TerminalConsole:
         @param end: String to append to the end of a message, adds a newline if not provided.
         @return: True if continued, False if canceled.
         """
+        # Non-interactive contexts (e.g. the web render worker) can never
+        # answer an input() prompt — treat every choice as "continue"
+        if os.environ.get('PROXYSHOP_NONINTERACTIVE') == '1':
+            self.signal(True)
+            if thr:
+                self.start_await_cancel(thr)
+            return True
+
         # Clear other await procedures, then begin awaiting a user signal
         self.end_await()
         self.update(msg=msg or self.message_waiting, end=end)
