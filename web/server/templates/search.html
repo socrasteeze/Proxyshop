@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Card Search — Proxyshop Web{% endblock %}
+{% block content %}
+
+<div class="panel">
+  <h2>Search the local card database</h2>
+  <p class="muted">{{ '{:,}'.format(stats.cards) }} cards cached
+    {% if stats.bulk_imported_at %} · bulk import {{ stats.bulk_imported_at }}
+    {% else %} · run a bulk import to search all of Magic offline{% endif %}
+  </p>
+  <form action="/search" method="get" style="display:flex; gap:.7rem; max-width:480px">
+    <input name="q" value="{{ q }}" placeholder="Card name…" style="flex:1" minlength="2">
+    <button type="submit">Search</button>
+  </form>
+</div>
+
+{% if q %}
+<div class="panel">
+  <h2>Results for “{{ q }}”</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Set</th><th>#</th><th>Released</th></tr></thead>
+    <tbody>
+      {% for c in results %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td>{{ (c.set or '')|upper }}</td>
+        <td>{{ c.collector_number }}</td>
+        <td class="muted">{{ c.released_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No local matches.
+        {% if not stats.bulk_imported_at %}Try a deck import or bulk import first.{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

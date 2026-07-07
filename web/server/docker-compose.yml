@@ -1,0 +1,21 @@
+# Run from the repository root:
+#   docker compose -f web/server/docker-compose.yml up -d --build
+services:
+  proxyshop-web:
+    build:
+      context: ../..
+      dockerfile: web/server/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - proxyshop-data:/data
+    environment:
+      # CHANGE THIS: shared secret between server and your Windows worker
+      PROXYSHOP_WORKER_TOKEN: ${PROXYSHOP_WORKER_TOKEN:-change-me}
+      # Set to "1" to forbid all live Scryfall calls (bulk/cache only)
+      PROXYSHOP_OFFLINE: "0"
+      PROXYSHOP_MAX_UPLOAD_MB: "50"
+    restart: unless-stopped
+
+volumes:
+  proxyshop-data:

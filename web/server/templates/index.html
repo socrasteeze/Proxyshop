@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Render a card</h2>
+    <form class="stack" id="submit-form" action="/api/jobs" method="post" enctype="multipart/form-data">
+      <label>Card name
+        <input name="card_name" required maxlength="200" placeholder="Lightning Bolt" autocomplete="off">
+      </label>
+      <div style="display:flex; gap:.7rem;">
+        <label style="flex:1">Set code <span class="muted">(optional)</span>
+          <input name="set_code" maxlength="10" placeholder="STA">
+        </label>
+        <label style="flex:1">Collector # <span class="muted">(optional)</span>
+          <input name="collector_number" maxlength="10" placeholder="42">
+        </label>
+      </div>
+      <label>Template
+        <select name="template_name">
+          <option value="">Default</option>
+          {% if caps %}
+            {% for cls, tmpls in caps.templates.items() %}
+              {% for t in tmpls %}
+                {% if t.installed %}
+                <option value="{{ t.name }}">{{ t.name }} ({{ cls }})</option>
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+          {% endif %}
+        </select>
+      </label>
+      <label>Art file
+        <input type="file" name="art" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" required>
+      </label>
+      <input type="hidden" name="idempotency_key" value="">
+      <button type="submit">Queue render</button>
+      <span class="muted" data-field="message"></span>
+    </form>
+    {% if not caps %}
+    <p class="muted">No worker has connected yet — template list will appear once your
+      Windows render worker performs its first handshake.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Status</h2>
+    <p>
+      {% for w in workers %}
+        <span class="pill">
+          {% if w.online %}<span class="ok-dot"></span>{% else %}<span class="off-dot"></span>{% endif %}
+          {{ w.name }}
+        </span>
+      {% else %}
+        <span class="muted">No workers registered yet.</span>
+      {% endfor %}
+    </p>
+    <p class="muted">
+      Card database: {{ '{:,}'.format(stats.cards) }} cards cached
+      {% if stats.bulk_imported_at %} · bulk import {{ stats.bulk_imported_at }}{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recent jobs</h2>
+  <table>
+    <thead><tr><th>Card</th><th>Template</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td><a href="/jobs/{{ job.id }}">{{ job.card_name }}</a>
+          {% if job.set_code %}<span class="muted">[{{ job.set_code|upper }}]</span>{% endif %}</td>
+        <td>{{ job.template_name or 'Default' }}</td>
+        <td><span class="status {{ job.status.value }}">{{ job.status.value }}</span></td>
+        <td class="muted">{{ job.created_at }}</td>
+        <td>{% if job.result_filename %}<a href="/api/jobs/{{ job.id }}/result">Download</a>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No jobs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  wireAsyncForm(document.getElementById('submit-form'), (data) => {
+    location.href = `/jobs/${data.id}`;
+  });
+});
+</script>
+{% endblock %}

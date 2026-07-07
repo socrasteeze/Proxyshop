@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ job.card_name }} — Proxyshop Web{% endblock %}
+{% block content %}
+
+<div class="panel" id="job-panel">
+  <h2>{{ job.card_name }}
+    {% if job.set_code %}<span class="muted">[{{ job.set_code|upper }}{% if job.collector_number %} #{{ job.collector_number }}{% endif %}]</span>{% endif %}
+  </h2>
+  <p>
+    <span class="status {{ job.status.value }}" data-field="status">{{ job.status.value }}</span>
+    <span class="pill">{{ job.template_name or 'Default template' }}</span>
+    <span class="pill">attempt {{ job.attempts }}</span>
+  </p>
+  <p class="muted">Created {{ job.created_at }}{% if job.finished_at %} · finished {{ job.finished_at }}{% endif %}</p>
+  <p style="color: var(--err)" data-field="error">{{ job.error or '' }}</p>
+
+  {% if job.status.value == 'done' and job.result_filename %}
+    <p><a href="/api/jobs/{{ job.id }}/result"><button>Download render</button></a></p>
+    <img class="result" src="/api/jobs/{{ job.id }}/result" alt="Rendered card">
+  {% endif %}
+
+  {% if job.log %}
+  <h2 style="margin-top:1rem">Worker log</h2>
+  <pre class="log" data-field="log">{{ job.log }}</pre>
+  {% else %}
+  <pre class="log" data-field="log" style="display:none"></pre>
+  {% endif %}
+</div>
+
+<p><a href="/">&larr; Back to queue</a></p>
+
+{% if job.status.value not in ('done', 'failed') %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  pollJob('{{ job.id }}', document.getElementById('job-panel'));
+});
+</script>
+{% endif %}
+{% endblock %}

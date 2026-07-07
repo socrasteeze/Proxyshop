@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Decks — Proxyshop Web{% endblock %}
+{% block content %}
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Import a deck</h2>
+    <p class="muted">Paste a decklist (plain, MTGA or MTGO export) or a public
+      Moxfield / Archidekt deck URL. Every card gets resolved and cached into the
+      local card database.</p>
+    <form class="stack" id="import-form" action="/api/decks/import" method="post">
+      <label>Deck name <span class="muted">(optional)</span>
+        <input name="name" maxlength="200" placeholder="My Commander deck">
+      </label>
+      <label>Deck URL
+        <input name="url" maxlength="500" placeholder="https://moxfield.com/decks/…">
+      </label>
+      <label>… or paste decklist text
+        <textarea name="text" maxlength="100000" placeholder="4 Lightning Bolt&#10;1 Sol Ring (C21) 125&#10;&#10;Sideboard&#10;2 Duress"></textarea>
+      </label>
+      <button type="submit">Import &amp; cache</button>
+      <span class="muted" data-field="message"></span>
+    </form>
+    <div id="import-report"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Saved decks</h2>
+    <p class="muted">{{ '{:,}'.format(stats.cards) }} cards in the local database.</p>
+    <table>
+      <thead><tr><th>Name</th><th>Cards</th><th>Imported</th></tr></thead>
+      <tbody>
+        {% for d in decks %}
+        <tr>
+          <td>{% if d.source_url %}<a href="{{ d.source_url }}" rel="noopener">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td>{{ d.cards }}</td>
+          <td class="muted">{{ d.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="muted">No decks imported yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  wireAsyncForm(document.getElementById('import-form'), (report) => {
+    const el = document.getElementById('import-report');
+    const bad = report.unresolved.map(u =>
+      `<li>${u.qty}× ${u.name}${u.set_code ? ` (${u.set_code})` : ''}</li>`).join('');
+    el.innerHTML = `
+      <div class="panel" style="margin-top:1rem">
+        <h2>Imported: ${report.deck_name}</h2>
+        <p>${report.resolved.length} lines resolved
+           (${report.from_cache} from cache, ${report.from_api} fetched) ·
+           ${report.unresolved.length} not found.</p>
+        ${bad ? `<p class="muted">Not found:</p><ul class="muted">${bad}</ul>` : ''}
+        <p class="muted">Reload the page to see the deck in the list.</p>
+      </div>`;
+  });
+});
+</script>
+{% endblock %}
