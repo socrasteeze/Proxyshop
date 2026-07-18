@@ -112,6 +112,47 @@ Desktop Proxyshop can share the same cache: set `PROXYSHOP_CARD_CACHE=cache_firs
 All state lives in the `proxyshop-data` Docker volume (`/data` in the
 container): `jobs.db`, `cards.db`, and per-job art/results under `/data/jobs/`.
 
+### Alternative: one-command deploy with `nas-update.sh`
+
+If your NAS has no git (TerraMaster TOS, Synology DSM), use the bundled
+`nas-update.sh` instead of the compose flow above. It fetches a source
+snapshot from GitHub over HTTPS with a personal access token, rebuilds the
+image, restarts the container, and health-checks it.
+
+One-time setup on the NAS:
+
+```sh
+# GitHub -> Settings -> Developer settings -> PAT (classic, `repo` scope)
+echo "<your_token>" > ~/.gh-token && chmod 600 ~/.gh-token
+# Copy nas-update.sh onto the NAS once (scp or paste), then:
+sh nas-update.sh
+```
+
+The first run generates the worker token at `~/.proxyshop-worker-token`
+(printed once — use it on the Windows machine), creates the data directory
+(`/Volume1/proxyshop/data`, bind-mounted as `/data`), installs the code to
+`~/proxyshop-web`, and starts the container.
+
+After that, refresh from your Windows desktop with one command —
+`nas-refresh.bat` (edit `NAS_HOST` at the top once; add an SSH key for a
+passwordless run):
+
+```
+ssh-keygen -t ed25519
+type %USERPROFILE%\.ssh\id_ed25519.pub | ssh <user>@<nas> "cat >> ~/.ssh/authorized_keys"
+nas-refresh.bat
+```
+
+Notes:
+- The script deploys from the branch named in its config block — currently
+  the feature branch; switch `BRANCH` to `main` once merged.
+- TerraMaster mounts live under `/Volume1` (capital V), Synology under
+  `/volume1` — the script defaults to TerraMaster; check with `df -h`.
+- `PermissionError` on `/data` means the container user doesn't match the
+  volume owner: check `ls -n /Volume1/proxyshop` and adjust
+  `CONTAINER_USER` in the script.
+- Test the fetch/install path on any Linux box with `DRY_RUN=1 sh nas-update.sh`.
+
 ## Part 2 — Remote access (Tailscale, recommended)
 
 Do **not** port-forward the app to the open internet. Instead:
