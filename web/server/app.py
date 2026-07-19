@@ -250,6 +250,9 @@ def page_decks(request: Request):
     })
 
 
+PER_PAGE_OPTIONS = (24, 48, 60, 96, 120)
+
+
 @app.get('/gallery', response_class=HTMLResponse)
 def page_gallery(
     request: Request,
@@ -258,14 +261,26 @@ def page_gallery(
     set: str = '',
     sort: str = 'name',
     page: int = 1,
+    per_page: int = 60,
+    view: str = 'grid',
+    arts: str = 'unique',
 ):
     """Browse all locally cached cards as a gallery."""
     game = (game or '').strip().lower()
     if game and game not in games.GAMES:
         raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
     sort = sort if sort in {'name', 'set', 'newest'} else 'name'
+    view = view if view in {'grid', 'list'} else 'grid'
+    arts = arts if arts in {'unique', 'combine'} else 'unique'
+    group_arts = arts == 'combine'
     page = max(int(page or 1), 1)
-    per_page = 60
+    try:
+        per_page = int(per_page or 60)
+    except (TypeError, ValueError):
+        per_page = 60
+    if per_page not in PER_PAGE_OPTIONS:
+        per_page = min(PER_PAGE_OPTIONS, key=lambda n: abs(n - per_page))
+
     cards, total = carddb.list_gallery(
         game=game or None,
         q=q,
@@ -273,6 +288,7 @@ def page_gallery(
         offset=(page - 1) * per_page,
         limit=per_page,
         sort=sort,
+        group_arts=group_arts,
     )
     counts = carddb.counts_by_game()
     pages = max(1, (total + per_page - 1) // per_page) if total else 1
@@ -287,17 +303,27 @@ def page_gallery(
             offset=(page - 1) * per_page,
             limit=per_page,
             sort=sort,
+            group_arts=group_arts,
         )
 
-    def page_url(p: int) -> str:
+    def page_url(p: int, **overrides) -> str:
         from urllib.parse import urlencode
-        params = {'sort': sort, 'page': p}
-        if game:
-            params['game'] = game
-        if q:
-            params['q'] = q
-        if set:
-            params['set'] = set
+        params = {
+            'sort': overrides.get('sort', sort),
+            'page': p,
+            'per_page': overrides.get('per_page', per_page),
+            'view': overrides.get('view', view),
+            'arts': overrides.get('arts', arts),
+        }
+        g = overrides.get('game', game)
+        qq = overrides.get('q', q)
+        ss = overrides.get('set', set)
+        if g:
+            params['game'] = g
+        if qq:
+            params['q'] = qq
+        if ss:
+            params['set'] = ss
         return '/gallery?' + urlencode(params)
 
     # Compact page-number window: 1 … (page±2) … last
@@ -318,6 +344,10 @@ def page_gallery(
         'page': page,
         'pages': pages,
         'page_links': page_links,
+        'per_page': per_page,
+        'per_page_options': PER_PAGE_OPTIONS,
+        'view': view,
+        'arts': arts,
         'cards': cards,
         'total': total,
         'total_all': sum(counts.values()),
@@ -337,6 +367,7 @@ def api_cards_gallery(
     sort: str = 'name',
     offset: int = 0,
     limit: int = 60,
+    arts: str = 'unique',
 ):
     """JSON gallery of locally cached cards (no live provider calls)."""
     rate_limit(request, 'api')
@@ -344,6 +375,7 @@ def api_cards_gallery(
     if game and game not in games.GAMES:
         raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
     sort = sort if sort in {'name', 'set', 'newest', 'id'} else 'name'
+    arts = arts if arts in {'unique', 'combine'} else 'unique'
     cards, total = carddb.list_gallery(
         game=game or None,
         q=q,
@@ -351,11 +383,13 @@ def api_cards_gallery(
         offset=offset,
         limit=limit,
         sort=sort,
+        group_arts=(arts == 'combine'),
     )
     return {
         'total': total,
         'offset': max(int(offset), 0),
         'limit': min(max(int(limit), 1), 200),
+        'arts': arts,
         'counts': carddb.counts_by_game(),
         'cards': [{
             'id': c.get('id'),
@@ -364,6 +398,7 @@ def api_cards_gallery(
             'set_name': c.get('set_name'),
             'collector_number': c.get('collector_number'),
             'game': c.get('game', 'mtg'),
+            'art_count': c.get('art_count', 1),
             'thumb': (
                 f"/api/cards/{c['id']}/image?kind=large" if c.get('id') else None),
         } for c in cards],
@@ -776,6 +811,28 @@ def api_card_search(request: Request, q: str, limit: int = 30, game: str = 'mtg'
 @app.get('/card/{card_id}', response_class=HTMLResponse)
 def page_card(request: Request, card_id: str):
     """Card detail view: big scan + attributes, any game."""
+    payload = _card_detail_payload(card_id)
+    return templates.TemplateResponse(request, 'card.html', {
+        'card': payload['card'],
+        'game': payload['game'],
+        'game_label': payload['game_label'],
+        'details': [(d['label'], d['value']) for d in payload['details']],
+        'price': payload['price'],
+        'has_art_crop': payload['has_art_crop'],
+    })
+
+
+@app.get('/api/cards/{card_id}/detail')
+def api_card_detail(request: Request, card_id: str):
+    """JSON card detail for the in-place gallery/search popover."""
+    rate_limit(request, 'api')
+    payload = _card_detail_payload(card_id)
+    payload.pop('card', None)
+    return payload
+
+
+def _card_detail_payload(card_id: str) -> dict:
+    """Shared fields for the HTML card page and the popover JSON API."""
     card = carddb.get_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail='Card not in the local database')
@@ -789,7 +846,6 @@ def page_card(request: Request, card_id: str):
                 return v
         return None
 
-    # Riftbound stats live on provider_data (domain/energy/might/powerCost)
     rb_stats = None
     if game == 'riftbound':
         parts = []
@@ -803,26 +859,45 @@ def page_card(request: Request, card_id: str):
             parts.append(f"Might {provider['might']}")
         rb_stats = ' · '.join(parts) if parts else None
 
-    details = [(label, value) for label, value in [
-        ('Set', f"{first('set_name') or (card.get('set') or '').upper()}"
-                + (f" · #{card.get('collector_number')}" if card.get('collector_number') else '')),
-        ('Mana cost', first('mana_cost')),
-        ('Type', first('type_line', 'supertype', 'cardType')),
-        ('Text', first('oracle_text', 'effect', 'ability', 'description')),
-        ('P/T', f"{card.get('power')}/{card.get('toughness')}"
-                if card.get('power') is not None else None),
-        ('HP', provider.get('hp')),
-        ('Domain / Stats', rb_stats),
-        ('Rarity', first('rarity')),
-        ('Artist', first('artist')),
-        ('Released', first('released_at')),
-    ] if value]
+    details = [
+        {'label': label, 'value': value}
+        for label, value in [
+            ('Set', f"{first('set_name') or (card.get('set') or '').upper()}"
+                    + (f" · #{card.get('collector_number')}" if card.get('collector_number') else '')),
+            ('Mana cost', first('mana_cost')),
+            ('Type', first('type_line', 'supertype', 'cardType')),
+            ('Text', first('oracle_text', 'effect', 'ability', 'description')),
+            ('P/T', f"{card.get('power')}/{card.get('toughness')}"
+                    if card.get('power') is not None else None),
+            ('HP', provider.get('hp')),
+            ('Domain / Stats', rb_stats),
+            ('Rarity', first('rarity')),
+            ('Artist', first('artist')),
+            ('Released', first('released_at')),
+        ] if value
+    ]
     price = carddb.get_prices([card_id]).get(card_id)
-    return templates.TemplateResponse(request, 'card.html', {
-        'card': card, 'game': game, 'game_label': games.GAME_LABELS.get(game, game),
-        'details': details, 'price': price,
+    return {
+        'id': card_id,
+        'name': card.get('name'),
+        'game': game,
+        'game_label': games.GAME_LABELS.get(game, game),
+        'set': card.get('set'),
+        'collector_number': card.get('collector_number'),
+        'details': details,
+        'price': price,
         'has_art_crop': game == 'mtg',
-    })
+        'can_edit': game in RENDERABLE_GAMES,
+        'image_png': f'/api/cards/{card_id}/image?kind=png',
+        'image_large': f'/api/cards/{card_id}/image?kind=large',
+        'image_art_crop': (
+            f'/api/cards/{card_id}/image?kind=art_crop' if game == 'mtg' else None),
+        'editor_url': f'/?card_id={card_id}' if game in RENDERABLE_GAMES else None,
+        'page_url': f'/card/{card_id}',
+        # Keep raw card for the HTML template only (dropped from JSON by FastAPI
+        # only if we omit it — templates need it).
+        'card': card,
+    }
 
 
 @app.get('/api/cards/{card_id}/image')

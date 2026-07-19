@@ -476,9 +476,11 @@ function wireCacheBadge() {
       if (running.length) {
         badge.hidden = false;
         badge.textContent = String(running.length);
+        badge.setAttribute('aria-label', `${running.length} downloads in progress`);
       } else {
         badge.hidden = true;
         badge.textContent = '';
+        badge.removeAttribute('aria-label');
       }
       if (body.any_running) {
         if (!timer) timer = setInterval(refresh, 10000);
@@ -490,6 +492,126 @@ function wireCacheBadge() {
   }
 
   refresh();
+}
+
+/**
+ * In-place card popover: intercept .js-card-preview clicks, fetch detail JSON,
+ * keep scroll position when closed. Falls back to full page navigation if JS
+ * or the API fails.
+ */
+function wireCardPopover(root = document) {
+  const modal = document.getElementById('card-modal');
+  const body = document.getElementById('card-modal-body');
+  const title = document.getElementById('card-modal-title');
+  if (!modal || !body || !title) return;
+
+  let lastFocus = null;
+  let abort = null;
+
+  function close() {
+    modal.hidden = true;
+    document.body.classList.remove('modal-open');
+    if (abort) { abort.abort(); abort = null; }
+    if (lastFocus && typeof lastFocus.focus === 'function') {
+      try { lastFocus.focus(); } catch (e) { /* ignore */ }
+    }
+    lastFocus = null;
+  }
+
+  function money(n) {
+    if (n == null || Number.isNaN(Number(n))) return null;
+    return `$${Number(n).toFixed(2)}`;
+  }
+
+  function render(data) {
+    title.textContent = data.name || 'Card';
+    const details = (data.details || []).map((d) =>
+      `<tr><th style="width:7rem">${escapeHtml(d.label)}</th>`
+      + `<td>${escapeHtml(String(d.value))}</td></tr>`).join('');
+    let priceRow = '';
+    if (data.price) {
+      const bits = [];
+      const usd = money(data.price.usd);
+      const foil = money(data.price.usd_foil);
+      const eur = data.price.eur != null ? `€${Number(data.price.eur).toFixed(2)}` : null;
+      if (usd) bits.push(usd);
+      if (foil) bits.push(`foil ${foil}`);
+      if (eur) bits.push(eur);
+      if (bits.length) {
+        priceRow = `<tr><th>Price</th><td>${escapeHtml(bits.join(' · '))}`
+          + ` <span class="muted">(${escapeHtml(data.price.source || '')})</span></td></tr>`;
+      }
+    }
+    const actions = [];
+    if (data.editor_url) {
+      actions.push(`<a class="btn" href="${escapeHtml(data.editor_url)}">Open in editor</a>`);
+    }
+    if (data.image_png) {
+      actions.push(`<a class="btn btn-ghost" href="${escapeHtml(data.image_png)}" download>Download high-quality scan</a>`);
+    }
+    if (data.image_art_crop) {
+      actions.push(`<a class="btn btn-ghost" href="${escapeHtml(data.image_art_crop)}" download>Download art crop</a>`);
+    }
+    if (data.page_url) {
+      actions.push(`<a class="btn btn-ghost" href="${escapeHtml(data.page_url)}">Open full page</a>`);
+    }
+    const pill = data.game_label
+      ? ` <span class="pill">${escapeHtml(data.game_label)}</span>` : '';
+    body.innerHTML = `
+      <div class="card-frame">
+        <img src="${escapeHtml(data.image_png || data.image_large || '')}"
+             alt="${escapeHtml(data.name || '')}" width="745" height="1040">
+      </div>
+      <div>
+        <p style="margin:0 0 .7rem">${escapeHtml(data.name || '')}${pill}</p>
+        <table><tbody>${details}${priceRow}</tbody></table>
+        <p class="btn-row" style="margin-top:1rem">${actions.join('')}</p>
+      </div>`;
+  }
+
+  async function open(cardId, trigger) {
+    lastFocus = trigger || document.activeElement;
+    modal.hidden = false;
+    document.body.classList.add('modal-open');
+    title.textContent = 'Loading…';
+    body.innerHTML = '<p class="muted">Loading…</p>';
+    modal.querySelector('[data-modal-close]')?.focus?.();
+    if (abort) abort.abort();
+    abort = new AbortController();
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(cardId)}/detail`, {
+        signal: abort.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      render(await res.json());
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      body.innerHTML = `<p class="muted">Could not load card.`
+        + ` <a href="/card/${encodeURIComponent(cardId)}">Open full page</a>.</p>`;
+    }
+  }
+
+  const scope = root || document;
+  scope.addEventListener('click', (ev) => {
+    const link = ev.target.closest('.js-card-preview');
+    if (!link || !scope.contains(link)) return;
+    const id = link.getAttribute('data-card-id');
+    if (!id) return;
+    // Allow modified clicks (new tab) to navigate normally.
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    ev.preventDefault();
+    open(id, link);
+  });
+
+  modal.querySelectorAll('[data-modal-close]').forEach((el) => {
+    el.addEventListener('click', close);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && !modal.hidden) {
+      ev.preventDefault();
+      close();
+    }
+  });
 }
 
 /* Give every submit form a fresh idempotency key per page load. */

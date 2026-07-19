@@ -104,6 +104,48 @@ class TestStoreAndLookup:
         assert c['set'] == 'c21'
         assert c['collector_number'] == '125'
         assert c['game'] == 'mtg'
+        assert c['art_count'] == 1
+
+    def test_list_gallery_combine_arts_by_oracle(self, carddb):
+        # Same oracle_id → one group when combining; newest release wins
+        a = make_card('id-old', 'Lightning Bolt', 'lea', '161', released='1993-08-05')
+        b = make_card('id-new', 'Lightning Bolt', 'sta', '42', released='2021-04-23')
+        carddb.store_card(a)
+        carddb.store_card(b)
+        unique, u_total = carddb.list_gallery(group_arts=False)
+        assert u_total == 2
+        combined, c_total = carddb.list_gallery(group_arts=True)
+        assert c_total == 1
+        assert len(combined) == 1
+        assert combined[0]['id'] == 'id-new'
+        assert combined[0]['art_count'] == 2
+
+    def test_list_gallery_combine_non_mtg_by_name(self, carddb):
+        a = make_card('pkm-1', 'Pikachu', 'base1', '58', released='1999-01-01')
+        a['game'] = 'pokemon'
+        a['oracle_id'] = None
+        b = make_card('pkm-2', 'Pikachu', 'xy1', '42', released='2014-02-05')
+        b['game'] = 'pokemon'
+        b['oracle_id'] = None
+        carddb.store_card(a, game='pokemon')
+        carddb.store_card(b, game='pokemon')
+        cards, total = carddb.list_gallery(game='pokemon', group_arts=True)
+        assert total == 1
+        assert cards[0]['id'] == 'pkm-2'
+        assert cards[0]['art_count'] == 2
+
+    def test_list_gallery_combine_paginates_groups(self, carddb):
+        for i in range(5):
+            carddb.store_card(make_card(
+                f'a-{i}', f'Card {i}', 'aaa', str(i), released=f'2020-01-0{i+1}'))
+            carddb.store_card(make_card(
+                f'b-{i}', f'Card {i}', 'bbb', str(i), released=f'2021-01-0{i+1}'))
+        page, total = carddb.list_gallery(group_arts=True, limit=2, offset=0, sort='name')
+        assert total == 5
+        assert len(page) == 2
+        page2, _ = carddb.list_gallery(group_arts=True, limit=2, offset=2, sort='name')
+        assert len(page2) == 2
+        assert {c['id'] for c in page}.isdisjoint({c['id'] for c in page2})
 
     def test_fts_index_survives_upsert_and_delete_rebuild(self, tmp_path):
         # Existing DB without FTS gets backfilled on open

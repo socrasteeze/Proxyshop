@@ -6,8 +6,10 @@
 
 <div class="grid2 card-detail">
   <div class="panel card-detail-image">
-    <img class="result" width="745" height="1040"
-         src="/api/cards/{{ card.id }}/image?kind=png" alt="{{ card.name }}">
+    <div class="card-frame">
+      <img class="result" width="745" height="1040"
+           src="/api/cards/{{ card.id }}/image?kind=png" alt="{{ card.name }}">
+    </div>
   </div>
 
   <div class="panel">

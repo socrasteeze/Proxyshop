@@ -8,6 +8,9 @@
     <span class="muted">{{ '{:,}'.format(total_all) }} cards stored locally</span>
   </div>
   <form class="filter-bar" method="get" action="/gallery" id="gallery-form" role="search">
+    <input type="hidden" name="view" id="gallery-view" value="{{ view }}">
+    <input type="hidden" name="per_page" id="gallery-per-page-hidden" value="{{ per_page }}">
+    <input type="hidden" name="arts" id="gallery-arts-hidden" value="{{ arts }}">
     <label>Game
       <select name="game" id="gallery-game">
         <option value="" {% if not game %}selected{% endif %}>All games</option>
@@ -34,19 +37,19 @@
     <div class="filter-actions">
       <button type="submit">Apply filters</button>
       {% if q or set_code or game %}
-      <a class="btn btn-ghost" href="/gallery?sort={{ sort }}">Clear</a>
+      <a class="btn btn-ghost" href="{{ page_url(1, game='', q='', set='') }}">Clear filters</a>
       {% endif %}
     </div>
   </form>
   <div class="gallery-chips">
     <a class="pill {% if not game %}pill-active{% endif %}"
-       href="/gallery?sort={{ sort }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if set_code %}&set={{ set_code|urlencode }}{% endif %}">
+       href="{{ page_url(1, game='') }}">
       All · {{ '{:,}'.format(total_all) }}
     </a>
     {% for g, label in games.items() %}
     {% if counts.get(g) %}
     <a class="pill {% if game == g %}pill-active{% endif %}"
-       href="/gallery?game={{ g }}&sort={{ sort }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if set_code %}&set={{ set_code|urlencode }}{% endif %}">
+       href="{{ page_url(1, game=g) }}">
       {{ label }} · {{ '{:,}'.format(counts[g]) }}
     </a>
     {% endif %}
@@ -57,22 +60,71 @@
 <div class="panel">
   <div class="gallery-meta">
     <span class="muted">
-      Showing {{ cards|length }} of {{ '{:,}'.format(total) }} cards
+      Showing {{ cards|length }} of {{ '{:,}'.format(total) }}
+      {% if arts == 'combine' %}groups{% else %}cards{% endif %}
       {% if game %}· {{ games.get(game, game) }}{% endif %}
       {% if q %}· “{{ q }}”{% endif %}
       {% if set_code %}· set {{ set_code|upper }}{% endif %}
+      {% if arts == 'combine' %}· combined arts{% endif %}
     </span>
-    {% if pages > 1 %}
-    <span class="muted">Page {{ page }} of {{ pages }}</span>
-    {% endif %}
+    <div class="gallery-toolbar">
+      <div class="view-toggle" role="group" aria-label="View mode">
+        <a class="{% if view == 'grid' %}is-active{% endif %}"
+           href="{{ page_url(page, view='grid') }}" aria-label="Grid view">Grid</a>
+        <a class="{% if view == 'list' %}is-active{% endif %}"
+           href="{{ page_url(page, view='list') }}" aria-label="List view">List</a>
+      </div>
+      <label>Arts
+        <select id="gallery-arts" aria-label="Art grouping">
+          <option value="unique" {% if arts == 'unique' %}selected{% endif %}>Show unique arts</option>
+          <option value="combine" {% if arts == 'combine' %}selected{% endif %}>Combine (newest)</option>
+        </select>
+      </label>
+      <label>Per page
+        <select id="gallery-per-page" aria-label="Cards per page">
+          {% for n in per_page_options %}
+          <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if pages > 1 %}
+      <span class="muted">Page {{ page }} of {{ pages }}</span>
+      {% endif %}
+    </div>
   </div>
 
   {% if cards %}
+  {% if view == 'list' %}
+  <div class="card-list" id="gallery-grid">
+    {% for c in cards %}
+    <a class="card-list-row js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
+      <span class="card-frame">
+        <img loading="lazy" width="63" height="88"
+             src="/api/cards/{{ c.id }}/image?kind=large" alt="">
+      </span>
+      <span class="card-list-meta">
+        <span class="name">{{ c.name }}</span>
+        <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
+          · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
+        </span>
+      </span>
+      {% if c.art_count and c.art_count > 1 %}
+      <span class="card-list-badge" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
   <div class="card-grid" id="gallery-grid">
     {% for c in cards %}
-    <a class="card-tile" href="/card/{{ c.id }}">
-      <img loading="lazy" width="336" height="468"
-           src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+    <a class="card-tile js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
+      {% if c.art_count and c.art_count > 1 %}
+      <span class="card-badge" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>
+      {% endif %}
+      <span class="card-frame">
+        <img loading="lazy" width="336" height="468"
+             src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+      </span>
       <span class="caption">{{ c.name }}<br>
         <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
           · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
@@ -81,6 +133,7 @@
     </a>
     {% endfor %}
   </div>
+  {% endif %}
   {% else %}
   <p class="muted">
     No cards match your filters.
@@ -117,13 +170,41 @@
   {% endif %}
 </div>
 
+<div class="card-modal" id="card-modal" hidden aria-modal="true" role="dialog" aria-labelledby="card-modal-title">
+  <div class="card-modal-backdrop" data-modal-close tabindex="-1"></div>
+  <div class="card-modal-dialog" role="document">
+    <div class="card-modal-header">
+      <h2 id="card-modal-title">Card</h2>
+      <button type="button" class="card-modal-close" data-modal-close aria-label="Close">Close</button>
+    </div>
+    <div class="card-modal-body" id="card-modal-body">
+      <p class="muted">Loading…</p>
+    </div>
+  </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('gallery-form');
+  const artsSel = document.getElementById('gallery-arts');
+  const perPageSel = document.getElementById('gallery-per-page');
   document.getElementById('gallery-game').addEventListener('change', () => form.submit());
   document.getElementById('gallery-sort').addEventListener('change', () => form.submit());
-  // Debounced auto-search while typing; Enter still submits immediately.
-  // Focus is restored after the reload so typing can continue naturally.
+  artsSel.addEventListener('change', () => {
+    document.getElementById('gallery-arts-hidden').value = artsSel.value;
+    form.submit();
+  });
+  perPageSel.addEventListener('change', () => {
+    document.getElementById('gallery-per-page-hidden').value = perPageSel.value;
+    // Changing page size should restart at page 1
+    const pageInput = document.createElement('input');
+    pageInput.type = 'hidden';
+    pageInput.name = 'page';
+    pageInput.value = '1';
+    form.appendChild(pageInput);
+    form.submit();
+  });
+
   const FOCUS_KEY = 'proxyshop.gallery.focus';
   let t = null;
   ['gallery-q', 'gallery-set'].forEach((id) => {
@@ -147,6 +228,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   } catch (e) { /* private mode */ }
+
+  if (typeof wireCardPopover === 'function') {
+    wireCardPopover(document.getElementById('gallery-grid'));
+  }
 });
 </script>
 {% endblock %}

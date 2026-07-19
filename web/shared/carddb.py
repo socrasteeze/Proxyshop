@@ -515,6 +515,12 @@ class CardDB:
             'SELECT game, COUNT(*) AS n FROM cards GROUP BY game').fetchall()
         return {str(r['game']): int(r['n']) for r in rows}
 
+    # MTG: oracle_id (fallback to id). Other games: game + lower(name).
+    _ART_GROUP_EXPR = (
+        "CASE WHEN game = 'mtg' THEN COALESCE(NULLIF(oracle_id, ''), id) "
+        "ELSE (game || '|' || lower(name)) END"
+    )
+
     def list_gallery(
         self,
         *,
@@ -524,12 +530,17 @@ class CardDB:
         offset: int = 0,
         limit: int = 60,
         sort: str = 'name',
+        group_arts: bool = False,
     ) -> tuple[list[dict], int]:
         """Browse locally cached cards (no network).
 
         Returns (cards, total_matching). Cards are lightweight projections
         built from the denormalized columns (no per-row JSON parsing) — use
         get_by_id() when the full provider object is needed.
+
+        When group_arts is True, printings that share an art group collapse to
+        the newest release (MTG: oracle_id; other games: name within game) and
+        each row includes art_count.
         """
         con = self._conn()
         offset = max(int(offset), 0)
@@ -552,27 +563,65 @@ class CardDB:
             'newest': 'fetched_at DESC, name COLLATE NOCASE ASC',
             'id': 'id ASC',
         }.get(sort, 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC')
+
+        def _row(r: sqlite3.Row) -> dict:
+            return {
+                'id': r['id'],
+                'name': r['name'],
+                'set': r['set_code'],
+                'collector_number': r['collector_number'],
+                'lang': r['lang'],
+                'released_at': r['released_at'],
+                'game': r['game'] or 'mtg',
+                'art_count': int(r['art_count']) if 'art_count' in r.keys() else 1,
+            }
+
+        if not group_arts:
+            total = con.execute(
+                f'SELECT COUNT(*) AS n FROM cards WHERE {clause}', params
+            ).fetchone()['n']
+            rows = con.execute(
+                f"""
+                SELECT id, name, set_code, collector_number, lang, released_at, game,
+                       1 AS art_count
+                FROM cards
+                WHERE {clause}
+                ORDER BY {order}
+                LIMIT ? OFFSET ?
+                """, (*params, limit, offset)).fetchall()
+            return [_row(r) for r in rows], int(total)
+
+        group_expr = self._ART_GROUP_EXPR
         total = con.execute(
-            f'SELECT COUNT(*) AS n FROM cards WHERE {clause}', params
-        ).fetchone()['n']
+            f"""
+            SELECT COUNT(*) AS n FROM (
+                SELECT 1 FROM cards
+                WHERE {clause}
+                GROUP BY {group_expr}
+            )
+            """, params).fetchone()['n']
+        # Newest printing wins within each art group; outer ORDER BY uses the
+        # same sort keys as the ungrouped gallery.
         rows = con.execute(
             f"""
-            SELECT id, name, set_code, collector_number, lang, released_at, game
-            FROM cards
-            WHERE {clause}
+            SELECT id, name, set_code, collector_number, lang, released_at, game,
+                   art_count, fetched_at
+            FROM (
+                SELECT id, name, set_code, collector_number, lang, released_at, game,
+                       fetched_at,
+                       COUNT(*) OVER (PARTITION BY {group_expr}) AS art_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {group_expr}
+                           ORDER BY released_at DESC, fetched_at DESC, id ASC
+                       ) AS rn
+                FROM cards
+                WHERE {clause}
+            )
+            WHERE rn = 1
             ORDER BY {order}
             LIMIT ? OFFSET ?
             """, (*params, limit, offset)).fetchall()
-        cards = [{
-            'id': r['id'],
-            'name': r['name'],
-            'set': r['set_code'],
-            'collector_number': r['collector_number'],
-            'lang': r['lang'],
-            'released_at': r['released_at'],
-            'game': r['game'] or 'mtg',
-        } for r in rows]
-        return cards, int(total)
+        return [_row(r) for r in rows], int(total)
 
     def search_local(
         self,

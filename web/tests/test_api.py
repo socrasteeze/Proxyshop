@@ -58,11 +58,32 @@ class TestPages:
         assert res.status_code == 200
         assert 'Card library' in res.text
         assert 'Sol Ring' in res.text
+        assert 'Apply filters' in res.text
+        assert 'Show unique arts' in res.text
+        assert 'Per page' in res.text
+        assert 'Grid' in res.text and 'List' in res.text
         assert b'Card library' in client.get('/').content
         body = client.get('/api/cards/gallery').json()
         assert body['total'] == 1
         assert body['cards'][0]['name'] == 'Sol Ring'
         assert body['cards'][0]['thumb'].startswith('/api/cards/gal-1/image')
+        assert body['cards'][0]['art_count'] == 1
+
+    def test_gallery_toolbar_params(self, appmod, client):
+        for i in range(3):
+            appmod.carddb.store_card(make_card(
+                f'id-{i}', 'Lightning Bolt', f's{i}', str(i),
+                released=f'202{i}-01-01'))
+        res = client.get('/gallery', params={
+            'view': 'list', 'per_page': 24, 'arts': 'combine', 'q': 'Lightning'})
+        assert res.status_code == 200
+        assert 'card-list' in res.text
+        assert 'combined arts' in res.text
+        assert 'per_page=24' in res.text or 'value="24" selected' in res.text
+        body = client.get('/api/cards/gallery', params={'arts': 'combine', 'q': 'Lightning'}).json()
+        assert body['total'] == 1
+        assert body['arts'] == 'combine'
+        assert body['cards'][0]['art_count'] == 3
 
     def test_gallery_page_clamps_out_of_range(self, appmod, client):
         appmod.carddb.store_card(make_card('gal-1', 'Sol Ring', 'c21', '125'))
@@ -70,6 +91,19 @@ class TestPages:
         assert res.status_code == 200
         # Out-of-range page clamps to the last page and still shows cards
         assert 'Sol Ring' in res.text
+
+    def test_card_detail_api(self, appmod, client):
+        appmod.carddb.store_card(make_card('det-1', 'Sol Ring', 'c21', '125'))
+        body = client.get('/api/cards/det-1/detail').json()
+        assert body['id'] == 'det-1'
+        assert body['name'] == 'Sol Ring'
+        assert body['game'] == 'mtg'
+        assert body['image_png'].endswith('/image?kind=png')
+        assert body['can_edit'] is True
+        assert body['editor_url'] == '/?card_id=det-1'
+        assert any(d['label'] == 'Set' for d in body['details'])
+        assert 'card' not in body
+        assert client.get('/api/cards/missing/detail').status_code == 404
 
     def test_search_all_games_local_only(self, appmod, client):
         appmod.carddb.store_card(make_card('mtg-1', 'Charizard Dragon', 'xyz', '1'))
