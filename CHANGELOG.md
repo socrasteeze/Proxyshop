@@ -1,3 +1,29 @@
+## Web / NAS (this fork)
+
+Unversioned rolling notes for the self-hosted web stack under `web/`.
+Desktop Proxyshop release history continues below.
+
+### Feat
+
+- **Make / Editor**: art-replace workflow (keep frame & details); pan/zoom;
+  blank card; JSON import/export; compose frame styles; layer toggles; print
+  bleed; queue parity via `card_json` + `art_transform`
+- **Compose**: MTG / Pokémon / Riftbound Pillow renderer; symbol expansion;
+  custom-art vs full-scan handling
+- **Card library** (`/gallery`): views, arts unique/combine, per-page, card popover
+- **Offline cache UI**: Download/Resume/Stop header, inline logs, job chips,
+  Logs page, nav badge; APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
+- **Selective cache**: MTG/Pokémon filters; Riftbound via Riftcodex; Union Arena
+  via official cardlists
+- **Search / Decks / Sheets**: multi-game browse, deck import, HQ ZIP, PDF sheets
+
+### Docs
+
+- README: Proxyshop Web (NAS) overview
+- `docs/web-service-architecture.md`: Make, gallery, cache UI, compose, APIs
+
+---
+
 ## v1.13.2 (2024-02-15)
 
 ### Feat

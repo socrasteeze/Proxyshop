@@ -127,6 +127,10 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Local Proxyshop Web runtime (card DB, jobs, images, cache logs)
+# Never commit — may contain personal libraries and job history
+/data/
+
 # mypy
 .mypy_cache/
 .dmypy.json

@@ -15,6 +15,38 @@ If you need help with this app or wish to troubleshoot an issue, [please join ou
 
 </div>
 
+# 🌐 Proxyshop Web (NAS)
+
+This fork also ships a **self-hosted browser UI** under `web/`: run the FastAPI
+server on a NAS (or any Linux box), browse a local multi-game card library, and
+either **compose proxies on the NAS** (Pillow) or **queue Photoshop renders** on
+a Windows worker.
+
+| Page | Path | What it does |
+|---|---|---|
+| **Editor (Make)** | `/` | Pick a printing, **replace art** (keep frame/details), pan/zoom, preview Compose PNG, or queue Photoshop |
+| **Card library** | `/gallery` | Browse cached cards (views, filters, popover, open in editor) |
+| **Decks** | `/decks` | Import lists / Moxfield / Archidekt; ZIP of HQ scans; PDF sheets |
+| **Search** | `/search` | Live + local search; **Offline cache** panel (selective MTG/Pokémon filters, stop/resume) |
+| **Logs** | `/logs` | Live cache-run logs and job chips |
+
+**Supported games (web):** MTG, Pokémon, Union Arena, Riftbound. Photoshop
+rendering covers MTG (and Pokémon when PSDs are installed). **Compose** works
+for MTG / Pokémon / Riftbound without Windows.
+
+Full setup, architecture, env vars, and API reference:
+
+→ **[docs/web-service-architecture.md](docs/web-service-architecture.md)**
+
+Quick local run:
+
+```bash
+pip install -r web/server/requirements.txt
+python -m uvicorn web.server.app:app --port 8000
+# optional fake worker (no Photoshop):
+python -m web.worker.daemon --fake
+```
+
 # 🛠️ Requirements
 - Photoshop (2017-2024 Supported)
 - Windows (currently incompatible with Mac/Linux)

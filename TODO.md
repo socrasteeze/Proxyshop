@@ -1,7 +1,5 @@
 # Offline-Cache UX Improvements
 
-Ref: [Plan](C:\Users\socrasteeze\.claude\plans\for-this-repo-there-s-tingly-koala.md)
-
 ## Backend
 
 - [x] **cache_runner.py** — log capture + all_status

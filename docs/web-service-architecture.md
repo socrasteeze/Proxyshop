@@ -1,7 +1,13 @@
 # Proxyshop Web Service — Architecture & Setup Guide
 
 Run Proxyshop as a self-hosted web service: a browser UI hosted on your NAS,
-with rendering performed by a Windows machine (or VM) running Photoshop.
+with optional Photoshop rendering on a Windows machine (or VM). The NAS also
+runs a **Compose** engine (Pillow) so MTG / Pokémon / Riftbound proxies can be
+previewed and downloaded without Windows.
+
+Pages: **Editor** (`/`), **Card library** (`/gallery`), **Decks** (`/decks`),
+**Search** (`/search`), **Logs** (`/logs`). See the
+[README Web section](../README.md#-proxyshop-web-nas) for a short overview.
 
 ## Why this shape?
 
@@ -33,9 +39,9 @@ Windows machine. If the worker is offline, jobs simply wait in the queue.
 
 | Path | Runs on | Purpose |
 |---|---|---|
-| `web/server/` | NAS (Docker) | Web UI, REST API, job queue, card DB. Never imports `src/`. |
+| `web/server/` | NAS (Docker) | Web UI, REST API, job queue, card DB, Compose engine, offline cache. Never imports `src/`. |
 | `web/worker/` | Windows | Claims jobs, renders via the Proxyshop pipeline, uploads results. |
-| `web/shared/` | Both | API schemas, card database, decklist parsing. |
+| `web/shared/` | Both | API schemas, card database, decklist parsing, Compose (Pillow). |
 
 ### Job lifecycle
 
@@ -132,6 +138,15 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   missing images for cards already in the DB. Riftbound uses public Riftcodex
   (no key) plus DotGG Arcane Box promos. Full MTG dumps still use
   `manage bulk-download`.
+
+  **Cache UI:** Search → Offline cache shows a header with Download / Resume /
+  Stop, an inline run log, job chips for other games, and Advanced → Start over.
+  The nav **Search** link shows a badge while any cache job is running; the
+  **Logs** page (`/logs`) is a full live viewer with game switcher. APIs:
+  `GET /api/cache-jobs`, `GET /api/cache-game/{game}/log`.
+- **Card library (`/gallery`)**: browse the local DB with list/grid views,
+  unique-vs-combine arts, per-page size, and a card popover (detail + open in
+  editor). Cross-game FTS search is shared with Search.
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
   Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when
@@ -141,8 +156,20 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   - `compose` — Pillow blank-frame compositor on the NAS for **MTG, Pokémon,
     and Riftbound** (no Windows needed)
   - `photoshop` — queue for the Windows worker + PSD templates
-  **Browser editor** (`/edit?card_id=…`): open any cached card from Search →
-  *Edit in browser*, change text/art, preview and download a composed PNG.
+
+  **Make / Editor (`/`)** — primary art-replace workflow:
+  1. Pick an existing printing (search, gallery, or `?card_id=`).
+  2. Optionally upload replacement art — **frame, name, rules, set, and other
+     details stay the same**; only the art window changes.
+  3. Pan/zoom the art; preview with Compose; download PNG or queue (Compose or
+     Photoshop). Queue accepts the same `card_json` + `art_transform` as the
+     live preview so results match.
+
+  Also on Make: blank card, JSON import/export, compose frame styles
+  (default / borderless / fullart / wide by game), layer toggles (art / text /
+  footer), `{W}`/`{T}` symbol expansion in Compose text, and optional print
+  bleed padding. Legacy `/edit?card_id=…` redirects here.
+
   Optional blank PNGs go under `web/shared/compose/frames/` (see README there);
   otherwise procedural tinted frames are generated.
 - **Print prep**: each saved deck has *Download images* — a ZIP of unique HQ
@@ -169,6 +196,22 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
 Desktop Proxyshop can share the same cache: set `PROXYSHOP_CARD_CACHE=cache_first`
 (and optionally `PROXYSHOP_CARD_DB=path/to/cards.db`) before launching, and
 `get_card_data` consults the local DB before touching the API.
+
+### Secrets & local data (do not commit)
+
+Keep these **off** the git tree — they can expose your NAS, GitHub account, or
+worker:
+
+| Item | Where it should live |
+|---|---|
+| GitHub PAT | `~/.gh-token` (`chmod 600`) — never in the repo |
+| Worker token | `PROXYSHOP_WORKER_TOKEN` / `~/.proxyshop-worker-token` |
+| Provider keys | e.g. `~/.proxyshop-pokemontcg-key` |
+| Runtime DB / images / jobs | Docker volume or local `./data/` (gitignored) |
+| `.env` | Local only (already gitignored) |
+
+Docs use placeholders (`<nas>`, `<token>`, `YOUR_POKEMONTCG_KEY`). Do not paste
+real hostnames, IPs, passwords, or tokens into README/CHANGELOG commits.
 
 ### API hygiene
 
@@ -359,15 +402,22 @@ Interactive docs live at `/api/docs`. Key endpoints:
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
-| `/api/jobs` | POST | — | Submit render job (multipart: fields + art) |
+| `/api/jobs` | POST | — | Submit render job (multipart: fields + optional art, `card_json`, `art_transform`) |
 | `/api/jobs/{id}` | GET | — | Job status/detail |
 | `/api/jobs/{id}/result` | GET | — | Download rendered PNG |
+| `/api/compose` | POST | — | Live Compose preview/download (card_json + optional art / art_transform / bleed_px) |
 | `/api/templates` | GET | — | Template options (from worker handshake) |
-| `/api/cards/search?q=` | GET | — | Local card DB search |
+| `/api/cards/search?q=` | GET | — | Local card DB search (+ live fallback) |
+| `/api/cards/gallery` | GET | — | Card library listing |
 | `/api/decks/import` | POST | — | Import decklist text or Moxfield/Archidekt URL |
 | `/api/decks/{id}/images` | GET | — | ZIP of HQ card scans + decklist manifest |
 | `/api/sheets` | POST | — | Compile proxy sheet PDF (deck_id or text, paper=letter/a4) |
 | `/api/sheets/{id}` | GET | — | Download compiled PDF |
+| `/api/cache-game/{game}` | GET | — | Offline-cache status for one game |
+| `/api/cache-game/{game}/start` | POST | — | Start/resume selective or full cache |
+| `/api/cache-game/{game}/stop` | POST | — | Cooperative stop |
+| `/api/cache-game/{game}/log` | GET | — | Recent cache-run log lines |
+| `/api/cache-jobs` | GET | — | Status for all catalog-game cache jobs |
 | `/api/worker/hello` | POST | Bearer | Capabilities handshake |
 | `/api/worker/jobs/next?wait=25` | GET | Bearer | Long-poll claim |
 | `/api/worker/jobs/{id}/art` | GET | Bearer | Download job art |
