@@ -428,6 +428,51 @@ const GAME_LABELS_FALLBACK = {
   riftbound: 'Riftbound',
 };
 
+// Friendly wording for a run state.
+const CACHE_STATE_TEXT = {
+  running: 'downloading',
+  stopped: 'paused',
+  done: 'complete',
+  idle: 'idle',
+};
+
+/**
+ * Human-readable status for a cache run. Returns {main, detail, cls}:
+ *  - main:   headline, e.g. "Downloading 348 of 950 cards — now: Pikachu ex"
+ *  - detail: muted secondary, e.g. "348 images saved · 49 already had"
+ *  - cls:    state class (running/stopped/done/error)
+ */
+function formatCacheStatus(body) {
+  if (!body || (!body.status && !body.running) || body.status === 'idle') {
+    return { main: 'No download yet for this game.', detail: '', cls: 'idle' };
+  }
+  const stored = body.stored ?? 0;
+  const total = body.total_hint;
+  const prog = total ? `${stored} of ${total}` : `${stored}`;
+  const ok = body.images_ok ?? 0;
+  const skip = body.images_skip ?? 0;
+  const fail = body.images_fail ?? 0;
+  const detailBits = [`${ok} images saved`];
+  if (skip) detailBits.push(`${skip} already had`);
+  if (fail) detailBits.push(`${fail} failed`);
+  const detail = detailBits.join(' · ');
+
+  if (body.running) {
+    let main = `Downloading ${prog} cards`;
+    if (body.current) main += ` — now: ${body.current}`;
+    return { main, detail, cls: 'running' };
+  }
+  if (body.status === 'stopped') {
+    if (body.error) return { main: `Stopped: ${body.error}`, detail: '', cls: 'error' };
+    return { main: `Paused at ${prog} cards — click Resume to continue`, detail, cls: 'stopped' };
+  }
+  if (body.status === 'done') {
+    return { main: `Complete — ${body.db_count ?? stored} cards cached`, detail, cls: 'done' };
+  }
+  if (body.error) return { main: `Error: ${body.error}`, detail: '', cls: 'error' };
+  return { main: body.status || 'Idle', detail, cls: '' };
+}
+
 function renderJobChips(container, jobs, onSelect, activeGame) {
   if (!container) return;
   const entries = Object.entries(jobs || {}).filter(([, st]) => {
@@ -449,12 +494,17 @@ function renderJobChips(container, jobs, onSelect, activeGame) {
     btn.className = 'job-chip';
     if (st.running) btn.classList.add('is-running');
     if (activeGame && game === activeGame) btn.classList.add('is-active');
-    const label = (st.query_label && String(st.query_label).slice(0, 40))
-      || GAME_LABELS_FALLBACK[game]
-      || game;
-    const state = st.running ? 'running' : (st.status || '');
-    btn.textContent = `${label} · ${state}`;
-    btn.title = st.query_label || game;
+    const gameName = GAME_LABELS_FALLBACK[game] || game;
+    const scope = st.label || st.query_label || 'Full catalog';
+    const state = st.running ? 'downloading' : (CACHE_STATE_TEXT[st.status] || st.status || '');
+    const dot = st.running ? '<span class="chip-dot"></span>' : '';
+    btn.innerHTML =
+      `${dot}<span class="chip-game">${escapeHtml(gameName)}</span>`
+      + `<span class="chip-scope">${escapeHtml(String(scope).slice(0, 32))}</span>`
+      + `<span class="chip-state">${escapeHtml(state)}</span>`;
+    btn.title = st.running && st.current
+      ? `${gameName} · ${scope} · downloading ${st.current}`
+      : `${gameName} · ${scope} · ${state}`;
     btn.addEventListener('click', () => {
       if (typeof onSelect === 'function') onSelect(game, st);
     });

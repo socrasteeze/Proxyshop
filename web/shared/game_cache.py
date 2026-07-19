@@ -18,7 +18,8 @@ from typing import Optional
 from web.shared import games, images
 from web.shared.cache_filters import (
     CACHEABLE_GAMES, SELECTIVE_GAMES, build_provider_query, describe_filters,
-    filters_equal, filters_require_selection, normalize_filters)
+    filters_equal, filters_require_selection, friendly_filters,
+    normalize_filters)
 from web.shared.carddb import CardDB
 
 STOP_SUFFIX = '.stop'
@@ -52,6 +53,7 @@ class CacheProgress:
     image_kind: str = 'png'
     filters: dict = None  # type: ignore[assignment]
     query: str = ''
+    current: str = ''      # name of the card currently being fetched
     updated_at: str = ''
     message: str = ''
 
@@ -202,6 +204,9 @@ def progress_dict(progress: Optional[CacheProgress], *, db_count: int = 0, runni
         'query': progress.query or '',
         'query_label': describe_filters(
             progress.game, progress.filters or {}, progress.query or ''),
+        'label': friendly_filters(
+            progress.game, progress.filters or {}, progress.query or ''),
+        'current': progress.current or '',
         'updated_at': progress.updated_at,
         'message': progress.message,
         'db_count': db_count,
@@ -335,6 +340,7 @@ def run_cache_game(
     filters: Optional[dict] = None,
     use_signals: bool = True,
     print_fn=print,
+    on_progress=None,
 ) -> CacheProgress:
     """Cache a TCG catalog (+ images) with stop/resume support.
 
@@ -440,9 +446,10 @@ def run_cache_game(
     try:
         with _StopWatch(runs_dir, game, use_signals=use_signals) as watch:
             if progress.mode == 'images-only':
-                _run_images_only(db, images_dir, progress, watch, print_fn)
+                _run_images_only(db, images_dir, progress, watch, print_fn, on_progress)
             else:
-                _run_catalog(db, images_dir, progress, watch, print_fn)
+                _run_catalog(db, images_dir, progress, watch, print_fn, on_progress)
+            progress.current = ''
             progress.status = 'done'
             progress.touch('complete')
             save_checkpoint(ck_path, progress)
@@ -481,6 +488,7 @@ def _run_catalog(
     progress: CacheProgress,
     watch: _StopWatch,
     print_fn,
+    on_progress=None,
 ) -> None:
     while True:
         watch.check()
@@ -501,6 +509,9 @@ def _run_catalog(
         try:
             for card in cards:
                 watch.check()
+                progress.current = str(card.get('name') or '')
+                if on_progress:
+                    on_progress(progress)
                 _store_and_image(db, images_dir, card, progress, watch, print_fn)
         finally:
             # One commit per provider page keeps stops/errors durable without
@@ -530,6 +541,7 @@ def _run_images_only(
     progress: CacheProgress,
     watch: _StopWatch,
     print_fn,
+    on_progress=None,
 ) -> None:
     total = db.count_by_game(progress.game)
     progress.total_hint = total
@@ -538,6 +550,9 @@ def _run_images_only(
         watch.check()
         processed += 1
         progress.offset += 1
+        progress.current = str(card.get('name') or '')
+        if on_progress:
+            on_progress(progress)
         if not progress.download_images:
             continue
         existing = images.cached_image_path(

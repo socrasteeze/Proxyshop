@@ -199,3 +199,62 @@ def describe_filters(game: str, filters: dict, query: str = '') -> str:
         return build_provider_query(game, filters) or '(all)'
     except ValueError:
         return '(none)'
+
+
+def _cap(value: Any) -> str:
+    s = str(value or '')
+    return s[:1].upper() + s[1:] if s else s
+
+
+def friendly_filters(game: str, filters: Optional[dict], query: str = '') -> str:
+    """Human-readable summary of a cache run's scope, for chips / status text.
+
+    e.g. {'supertype': 'Trainer'} → 'Trainers', {'set': 'slp'} → 'Set SLP',
+    {} → 'Full catalog'. Falls back to the raw query only if nothing else fits.
+    """
+    game = (game or '').strip().lower()
+    f = filters or {}
+    if not f:
+        return 'Full catalog' if not query else query
+    parts: list[str] = []
+
+    if game == 'mtg':
+        if f.get('set'):
+            parts.append(f"Set {str(f['set']).upper()}")
+        if f.get('type'):
+            parts.append(f"{_cap(f['type'])}s")
+        if f.get('rarity'):
+            parts.append(_cap(f['rarity']))
+        for flag in f.get('art') or []:
+            parts.append(_cap(flag))
+        if f.get('artist'):
+            parts.append(f"by {f['artist']}")
+        if f.get('year'):
+            parts.append(str(f['year']))
+        if f.get('tags'):
+            parts.append(str(f['tags']))
+        if f.get('q'):
+            parts.append(str(f['q']))
+    elif game == 'pokemon':
+        # Trainer / Energy / Pokémon read fine as-is (no naive pluralization)
+        if f.get('supertype'):
+            parts.append(_cap(f['supertype']))
+        for st in f.get('subtypes') or []:
+            parts.append(_cap(st))
+        for t in f.get('types') or []:
+            parts.append(_cap(t))
+        if f.get('set'):
+            parts.append(f"Set {str(f['set']).upper()}")
+        if f.get('rarity'):
+            parts.append(_cap(f['rarity']))
+        if f.get('regulation'):
+            parts.append(f"Reg {f['regulation']}")
+        if f.get('name'):
+            parts.append(f'"{f["name"]}"')
+        if f.get('q'):
+            parts.append(str(f['q']))
+    else:
+        if f.get('q'):
+            parts.append(str(f['q']))
+
+    return ', '.join(parts) if parts else (query or 'Full catalog')

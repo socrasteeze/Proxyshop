@@ -6,6 +6,27 @@ import pytest
 
 # Local Imports
 from web.shared import cache_filters as cf
+from web.shared.cache_filters import friendly_filters
+
+
+class TestFriendlyFilters:
+
+    def test_empty_is_full_catalog(self):
+        assert friendly_filters('riftbound', {}) == 'Full catalog'
+
+    def test_pokemon_supertype(self):
+        assert friendly_filters('pokemon', {'supertype': 'Trainer'}) == 'Trainer'
+
+    def test_pokemon_multi(self):
+        label = friendly_filters('pokemon', {'set': 'slp', 'types': ['Fire']})
+        assert 'Set SLP' in label and 'Fire' in label
+
+    def test_mtg_set_and_type(self):
+        label = friendly_filters('mtg', {'set': 'dom', 'type': 'creature'})
+        assert 'Set DOM' in label and 'Creatures' in label
+
+    def test_mtg_artist(self):
+        assert 'by John Avon' in friendly_filters('mtg', {'artist': 'John Avon'})
 
 
 def test_scryfall_query_requires_filter():

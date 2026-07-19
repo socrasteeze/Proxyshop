@@ -34,6 +34,9 @@ class FilterConflict(Exception):
 _lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
 _errors: dict[str, str] = {}
+# Live per-card snapshot (current card, counts) updated in-memory by the run
+# thread, so status polling shows the card being fetched without extra disk I/O.
+_live: dict[str, dict] = {}
 
 _log_lock = threading.Lock()
 _logs: dict[str, deque] = {}
@@ -48,10 +51,17 @@ def is_running(game: str) -> bool:
 
 def status(game: str, *, db: CardDB, runs_dir: Path) -> dict:
     progress = load_checkpoint(checkpoint_path(runs_dir, game))
+    running = is_running(game)
     payload = progress_dict(
         progress,
         db_count=db.count_by_game(game),
-        running=is_running(game))
+        running=running)
+    # While running, overlay the live in-memory snapshot (current card + fresh
+    # counts) which is newer than the per-page checkpoint on disk.
+    if running:
+        live = _live.get(game)
+        if live:
+            payload.update({k: v for k, v in live.items() if v is not None})
     err = _errors.get(game)
     if err and not payload.get('running'):
         payload['error'] = err
@@ -154,6 +164,18 @@ def start(
         if is_running(game):
             return status(game, db=db, runs_dir=runs_dir)
         _errors.pop(game, None)
+        _live.pop(game, None)
+
+        def _on_progress(progress) -> None:
+            # Cheap in-memory snapshot polled by status(); no disk writes.
+            _live[game] = {
+                'current': progress.current or '',
+                'stored': progress.stored,
+                'images_ok': progress.images_ok,
+                'images_skip': progress.images_skip,
+                'images_fail': progress.images_fail,
+                'total_hint': progress.total_hint,
+            }
 
         def _target() -> None:
             log(game, runs_dir, f'==> run started ({game})')
@@ -169,10 +191,13 @@ def start(
                     image_kind=image_kind,
                     use_signals=False,
                     print_fn=lambda *a, **k: log(game, runs_dir, *a),
+                    on_progress=_on_progress,
                 )
             except Exception as e:  # noqa: BLE001 — surface in status for UI
                 _errors[game] = str(e)
                 log(game, runs_dir, f'==> run crashed: {e}')
+            finally:
+                _live.pop(game, None)
 
         thread = threading.Thread(
             target=_target, name=f'cache-game-{game}', daemon=True)

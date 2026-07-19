@@ -19,7 +19,8 @@
     {% endfor %}
   </div>
 
-  <p class="muted" id="logs-status">—</p>
+  <p id="logs-status" class="cache-status">—</p>
+  <p id="logs-status-detail" class="muted cache-status-detail"></p>
   <pre id="logs-log" class="cache-log"></pre>
 </div>
 
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const catalog = (page.dataset.catalogGames || '').split(',').filter(Boolean);
   const jobsEl = document.getElementById('logs-jobs');
   const statusEl = document.getElementById('logs-status');
+  const detailEl = document.getElementById('logs-status-detail');
   const logEl = document.getElementById('logs-log');
   const pills = document.getElementById('logs-games');
   let game = page.dataset.game || catalog[0] || 'mtg';
@@ -76,14 +78,14 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch(`/api/cache-game/${encodeURIComponent(game)}`);
       const body = res.ok ? await res.json() : { status: 'idle', running: false };
-      const parts = [
-        body.running ? 'Running' : (body.status || 'idle'),
-        `stored=${body.stored ?? 0}`,
-        `images ok/skip/fail=${body.images_ok ?? 0}/${body.images_skip ?? 0}/${body.images_fail ?? 0}`,
-      ];
-      if (body.query_label) parts.push(body.query_label);
-      if (body.error) parts.push(`error: ${body.error}`);
-      statusEl.textContent = parts.join(' · ');
+      const st = (typeof formatCacheStatus === 'function')
+        ? formatCacheStatus(body)
+        : { main: body.status || 'idle', detail: '', cls: '' };
+      const scope = body.label || body.query_label;
+      statusEl.textContent = st.main;
+      statusEl.className = `cache-status is-${st.cls || 'idle'}`;
+      detailEl.textContent = [scope ? `Scope: ${scope}` : '', st.detail]
+        .filter(Boolean).join('  ·  ');
       const jobs = await refreshJobs();
       await refreshLog();
       const anyRunning = !!(body.running || (jobs && jobs.any_running));

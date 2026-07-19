@@ -392,19 +392,12 @@ document.addEventListener('DOMContentLoaded', () => {
         ? 'Offline mode is on — downloading needs a live provider.'
         : 'Set filters (MTG / Pokémon), then start the download. You can stop and resume later.';
     }
-    const parts = [
-      body.running ? 'Downloading' : (body.status || 'idle'),
-      `cards in database: ${body.db_count ?? 0}`,
-    ];
-    if (body.query_label) parts.push(`query: ${body.query_label}`);
-    if (body.stored != null) parts.push(`stored this run: ${body.stored}`);
-    if (body.images_ok != null) {
-      parts.push(`images downloaded/skipped/failed: ${body.images_ok}/${body.images_skip}/${body.images_fail}`);
-    }
-    if (body.total_hint) parts.push(`provider total ≈ ${body.total_hint}`);
-    if (body.message) parts.push(body.message);
-    if (body.error) parts.push(`error: ${body.error}`);
-    return parts.join(' · ');
+    const st = (typeof formatCacheStatus === 'function')
+      ? formatCacheStatus(body)
+      : { main: body.status || 'idle', detail: '' };
+    const scope = body.label || body.query_label;
+    return [st.main, scope ? `scope: ${scope}` : '', st.detail]
+      .filter(Boolean).join('  ·  ');
   }
 
   function applyButtons(body) {
