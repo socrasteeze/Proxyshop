@@ -458,6 +458,64 @@ class CardDB:
             'SELECT COUNT(*) AS n FROM cards WHERE game=?', (game,)).fetchone()
         return int(row['n']) if row else 0
 
+    def counts_by_game(self) -> dict[str, int]:
+        """Return {game: count} for every game present in the DB."""
+        rows = self._conn().execute(
+            'SELECT game, COUNT(*) AS n FROM cards GROUP BY game').fetchall()
+        return {str(r['game']): int(r['n']) for r in rows}
+
+    def list_gallery(
+        self,
+        *,
+        game: Optional[str] = None,
+        q: str = '',
+        set_code: str = '',
+        offset: int = 0,
+        limit: int = 60,
+        sort: str = 'name',
+    ) -> tuple[list[dict], int]:
+        """Browse locally cached cards (no network).
+
+        Returns (cards, total_matching).
+        """
+        con = self._conn()
+        offset = max(int(offset), 0)
+        limit = min(max(int(limit), 1), 200)
+        where = ['1=1']
+        params: list[Any] = []
+        if game:
+            where.append('game=?')
+            params.append(game)
+        if q.strip():
+            where.append('name LIKE ? COLLATE NOCASE')
+            params.append(f'%{q.strip()}%')
+        if set_code.strip():
+            where.append('set_code=?')
+            params.append(set_code.strip().lower())
+        clause = ' AND '.join(where)
+        order = {
+            'name': 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC',
+            'set': 'set_code ASC, collector_number ASC, name COLLATE NOCASE ASC',
+            'newest': 'fetched_at DESC, name COLLATE NOCASE ASC',
+            'id': 'id ASC',
+        }.get(sort, 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC')
+        total = con.execute(
+            f'SELECT COUNT(*) AS n FROM cards WHERE {clause}', params
+        ).fetchone()['n']
+        rows = con.execute(
+            f"""
+            SELECT game, json FROM cards
+            WHERE {clause}
+            ORDER BY {order}
+            LIMIT ? OFFSET ?
+            """, (*params, limit, offset)).fetchall()
+        cards = []
+        for r in rows:
+            card = json.loads(r['json'])
+            card.setdefault('game', r['game'] or 'mtg')
+            cards.append(card)
+        return cards, int(total)
+
     def search_local(self, text: str, limit: int = 50, game: str = 'mtg') -> list[dict]:
         """Substring name search against the local DB only (no network).
 

@@ -52,6 +52,18 @@ class TestPages:
     def test_search_page(self, client):
         assert client.get('/search?q=bolt').status_code == 200
 
+    def test_gallery_page(self, appmod, client):
+        appmod.carddb.store_card(make_card('gal-1', 'Sol Ring', 'c21', '125'))
+        res = client.get('/gallery')
+        assert res.status_code == 200
+        assert 'Cached gallery' in res.text
+        assert 'Sol Ring' in res.text
+        assert b'Gallery' in client.get('/').content
+        body = client.get('/api/cards/gallery').json()
+        assert body['total'] == 1
+        assert body['cards'][0]['name'] == 'Sol Ring'
+        assert body['cards'][0]['thumb'].startswith('/api/cards/gal-1/image')
+
     def test_health(self, client):
         body = client.get('/api/health').json()
         assert body['ok'] is True

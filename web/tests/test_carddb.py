@@ -50,6 +50,23 @@ class TestStoreAndLookup:
         names = {c['name'] for c in carddb.search_local('Lightning')}
         assert names == {'Lightning Bolt', 'Lightning Helix'}
 
+    def test_list_gallery_filters_and_pages(self, carddb):
+        carddb.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42'))
+        carddb.store_card(make_card('id-2', 'Sol Ring', 'c21', '125'))
+        pkm = make_card('pkm-1', 'Pikachu', 'base1', '58')
+        pkm['game'] = 'pokemon'
+        carddb.store_card(pkm, game='pokemon')
+        cards, total = carddb.list_gallery(game='mtg', limit=10)
+        assert total == 2
+        assert all(c.get('game', 'mtg') == 'mtg' for c in cards)
+        cards, total = carddb.list_gallery(q='pika')
+        assert total == 1
+        assert cards[0]['id'] == 'pkm-1'
+        assert carddb.counts_by_game()['pokemon'] == 1
+        page, total = carddb.list_gallery(limit=1, offset=0, sort='name')
+        assert total == 3
+        assert len(page) == 1
+
 
 class TestBulkImport:
 

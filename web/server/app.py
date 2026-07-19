@@ -250,6 +250,105 @@ def page_decks(request: Request):
     })
 
 
+@app.get('/gallery', response_class=HTMLResponse)
+def page_gallery(
+    request: Request,
+    game: str = '',
+    q: str = '',
+    set: str = '',
+    sort: str = 'name',
+    page: int = 1,
+):
+    """Browse all locally cached cards as a gallery."""
+    game = (game or '').strip().lower()
+    if game and game not in games.GAMES:
+        raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
+    sort = sort if sort in {'name', 'set', 'newest'} else 'name'
+    page = max(int(page or 1), 1)
+    per_page = 60
+    cards, total = carddb.list_gallery(
+        game=game or None,
+        q=q,
+        set_code=set,
+        offset=(page - 1) * per_page,
+        limit=per_page,
+        sort=sort,
+    )
+    counts = carddb.counts_by_game()
+    pages = max(1, (total + per_page - 1) // per_page) if total else 1
+    if page > pages:
+        page = pages
+
+    def page_url(p: int) -> str:
+        from urllib.parse import urlencode
+        params = {'sort': sort, 'page': p}
+        if game:
+            params['game'] = game
+        if q:
+            params['q'] = q
+        if set:
+            params['set'] = set
+        return '/gallery?' + urlencode(params)
+
+    return templates.TemplateResponse(request, 'gallery.html', {
+        'game': game,
+        'q': q,
+        'set_code': set,
+        'sort': sort,
+        'page': page,
+        'pages': pages,
+        'cards': cards,
+        'total': total,
+        'total_all': sum(counts.values()),
+        'counts': counts,
+        'games': games.GAME_LABELS,
+        'page_url': page_url,
+        'stats': carddb.stats(),
+    })
+
+
+@app.get('/api/cards/gallery')
+def api_cards_gallery(
+    request: Request,
+    game: str = '',
+    q: str = '',
+    set: str = '',
+    sort: str = 'name',
+    offset: int = 0,
+    limit: int = 60,
+):
+    """JSON gallery of locally cached cards (no live provider calls)."""
+    rate_limit(request, 'api')
+    game = (game or '').strip().lower()
+    if game and game not in games.GAMES:
+        raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
+    sort = sort if sort in {'name', 'set', 'newest', 'id'} else 'name'
+    cards, total = carddb.list_gallery(
+        game=game or None,
+        q=q,
+        set_code=set,
+        offset=offset,
+        limit=limit,
+        sort=sort,
+    )
+    return {
+        'total': total,
+        'offset': max(int(offset), 0),
+        'limit': min(max(int(limit), 1), 200),
+        'counts': carddb.counts_by_game(),
+        'cards': [{
+            'id': c.get('id'),
+            'name': c.get('name'),
+            'set': c.get('set'),
+            'set_name': c.get('set_name'),
+            'collector_number': c.get('collector_number'),
+            'game': c.get('game', 'mtg'),
+            'thumb': (
+                f"/api/cards/{c['id']}/image?kind=large" if c.get('id') else None),
+        } for c in cards],
+    }
+
+
 def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], str]:
     """Local-first card search with live provider fallback (cache-through).
 
