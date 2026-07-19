@@ -194,6 +194,28 @@ def _card_rows(payload: Any) -> list[dict]:
 """
 
 
+def _normalize_pokemon_card(c: dict) -> Optional[dict]:
+    card_set = c.get('set') or {}
+    if not isinstance(card_set, dict):
+        card_set = {}
+    raw_id = str(c.get('id') or '')
+    if not raw_id or not c.get('name'):
+        return None
+    return {
+        'object': 'card',
+        'game': 'pokemon',
+        'id': f"pkm-{_safe_id(raw_id)}",
+        'name': c.get('name', ''),
+        'set': card_set.get('id', ''),
+        'set_name': card_set.get('name', ''),
+        'collector_number': str(c.get('number', '')),
+        'lang': 'en',
+        'released_at': (card_set.get('releaseDate') or '').replace('/', '-'),
+        'images': c.get('images') or {},
+        'provider_data': c,
+    }
+
+
 def search_pokemon(name: str, limit: int = 20) -> list[dict]:
     """Search Pokémon cards by name. Hi-res scans come from images.large.
 
@@ -212,24 +234,100 @@ def search_pokemon(name: str, limit: int = 20) -> list[dict]:
         extra_headers=headers)
     cards = []
     for c in _card_rows(data):
-        card_set = c.get('set') or {}
-        if not isinstance(card_set, dict):
-            card_set = {}
-        raw_id = str(c.get('id') or '')
-        cards.append({
-            'object': 'card',
-            'game': 'pokemon',
-            'id': f"pkm-{_safe_id(raw_id)}",
-            'name': c.get('name', ''),
-            'set': card_set.get('id', ''),
-            'set_name': card_set.get('name', ''),
-            'collector_number': str(c.get('number', '')),
-            'lang': 'en',
-            'released_at': (card_set.get('releaseDate') or '').replace('/', '-'),
-            'images': c.get('images') or {},
-            'provider_data': c,
-        })
+        normalized = _normalize_pokemon_card(c)
+        if normalized:
+            cards.append(normalized)
     return cards
+
+
+def list_pokemon_page(
+    query: str,
+    page: int = 1,
+    page_size: int = 250,
+) -> tuple[list[dict], Optional[int]]:
+    """Fetch one pokemontcg.io search page for selective caching."""
+    headers = {}
+    key = _read_secret('PROXYSHOP_POKEMONTCG_KEY', _POKEMONTCG_KEY_FILE)
+    if key:
+        headers['X-Api-Key'] = key
+    page = max(int(page), 1)
+    page_size = min(max(int(page_size), 1), 250)
+    data = _get(
+        f'{POKEMON_API}/cards',
+        params={
+            'q': query,
+            'page': page,
+            'pageSize': page_size,
+            'orderBy': 'set.releaseDate,number'},
+        extra_headers=headers)
+    cards: list[dict] = []
+    for c in _card_rows(data):
+        normalized = _normalize_pokemon_card(c)
+        if normalized:
+            cards.append(normalized)
+    total: Optional[int] = None
+    if isinstance(data, dict) and data.get('totalCount') is not None:
+        try:
+            total = int(data['totalCount'])
+        except (TypeError, ValueError):
+            total = None
+    return cards, total
+
+
+def list_pokemon_sets() -> list[dict]:
+    """Compact Pokémon set list for cache UI pickers."""
+    headers = {}
+    key = _read_secret('PROXYSHOP_POKEMONTCG_KEY', _POKEMONTCG_KEY_FILE)
+    if key:
+        headers['X-Api-Key'] = key
+    data = _get(
+        f'{POKEMON_API}/sets',
+        params={'orderBy': '-releaseDate', 'pageSize': 250},
+        extra_headers=headers)
+    rows = []
+    for s in _card_rows(data):
+        if not s.get('id'):
+            continue
+        rows.append({
+            'id': s.get('id'),
+            'name': s.get('name') or s.get('id'),
+            'released_at': (s.get('releaseDate') or '').replace('/', '-'),
+            'card_count': s.get('total') or s.get('printedTotal'),
+            'series': s.get('series'),
+        })
+    return rows
+
+
+def list_pokemon_meta() -> dict:
+    """Types / subtypes / rarities / supertypes for filter dropdowns."""
+    headers = {}
+    key = _read_secret('PROXYSHOP_POKEMONTCG_KEY', _POKEMONTCG_KEY_FILE)
+    if key:
+        headers['X-Api-Key'] = key
+    fallback_types = [
+        'Colorless', 'Darkness', 'Dragon', 'Fairy', 'Fighting', 'Fire',
+        'Grass', 'Lightning', 'Metal', 'Psychic', 'Water']
+    fallback_supertypes = ['Pokémon', 'Trainer', 'Energy']
+
+    def _list(path: str) -> list[str]:
+        try:
+            payload = _get(f'{POKEMON_API}/{path}', params={}, extra_headers=headers)
+        except ProviderError:
+            return []
+        if isinstance(payload, dict):
+            rows = payload.get('data') or []
+        elif isinstance(payload, list):
+            rows = payload
+        else:
+            rows = []
+        return [str(x) for x in rows if x]
+
+    return {
+        'types': _list('types') or fallback_types,
+        'subtypes': _list('subtypes'),
+        'rarities': _list('rarities'),
+        'supertypes': _list('supertypes') or fallback_supertypes,
+    }
 
 
 """
@@ -536,8 +634,8 @@ def list_union_arena_page(page: int = 1, limit: int = 50) -> tuple[list[dict], O
     return [], None
 
 
-# Games that support full-catalog cache via manage cache-game
-CATALOG_GAMES = ('riftbound', 'union-arena')
+# Games that support cache-game (selective for mtg/pokemon; full for small TCGs)
+CATALOG_GAMES = ('mtg', 'pokemon', 'riftbound', 'union-arena')
 
 # Registry used by the server: game -> search callable
 PROVIDERS: dict[str, Callable[[str, int], list[dict]]] = {

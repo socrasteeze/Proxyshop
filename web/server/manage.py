@@ -2,9 +2,9 @@
 * Server Management CLI
 * Run inside the server container (or any host with web/ on the path):
 *   python -m web.server.manage bulk-download
-*   python -m web.server.manage bulk-import FILE
 *   python -m web.server.manage cache-game --game riftbound
-*   python -m web.server.manage cache-game --game riftbound --stop
+*   python -m web.server.manage cache-game --game mtg --set mh3 --art showcase
+*   python -m web.server.manage cache-game --game pokemon --set sv3 --type Fire
 *   python -m web.server.manage stats
 """
 # Standard Library Imports
@@ -18,11 +18,31 @@ from pathlib import Path
 from web.shared import games
 from web.shared.carddb import CardDB
 from web.shared.game_cache import (
-    checkpoint_path, load_checkpoint, request_stop, reset_checkpoint, run_cache_game)
+    checkpoint_path, load_checkpoint, progress_dict, request_stop,
+    reset_checkpoint, run_cache_game)
+from web.shared.images import IMAGE_KINDS
 
 DATA_DIR = Path(os.environ.get('PROXYSHOP_DATA_DIR', 'data'))
 IMAGES_DIR = DATA_DIR / 'images'
 CACHE_RUNS_DIR = DATA_DIR / 'cache-runs'
+
+
+def _filters_from_args(args) -> dict:
+    return {
+        'set': getattr(args, 'set_code', None),
+        'type': getattr(args, 'type', None),
+        'types': getattr(args, 'types', None),
+        'rarity': getattr(args, 'rarity', None),
+        'art': getattr(args, 'art', None),
+        'artist': getattr(args, 'artist', None),
+        'year': getattr(args, 'year', None),
+        'tags': getattr(args, 'tags', None),
+        'subtype': getattr(args, 'subtype', None),
+        'supertype': getattr(args, 'supertype', None),
+        'regulation': getattr(args, 'regulation', None),
+        'name': getattr(args, 'name', None),
+        'q': getattr(args, 'q', None),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,37 +64,36 @@ def main(argv: list[str] | None = None) -> int:
 
     p_cache = sub.add_parser(
         'cache-game',
-        help='Cache a small TCG catalog (+ HQ images) with stop/resume')
+        help='Cache cards (+ HQ images) with stop/resume; MTG/Pokémon need filters')
     p_cache.add_argument(
         '--game', required=True, choices=list(games.CATALOG_GAMES),
-        help='TCG to cache (riftbound uses RiftScribe; union-arena uses apitcg)')
+        help='mtg/pokemon require filters; riftbound/union-arena can mirror all')
+    p_cache.add_argument('--stop', action='store_true')
+    p_cache.add_argument('--status', action='store_true')
+    p_cache.add_argument('--reset', action='store_true')
+    p_cache.add_argument('--fresh', action='store_true')
+    p_cache.add_argument('--images-only', action='store_true')
+    p_cache.add_argument('--no-images', action='store_true')
+    p_cache.add_argument('--no-hydrate', action='store_true')
     p_cache.add_argument(
-        '--stop', action='store_true',
-        help='Ask a running cache-game for this TCG to stop after the current card')
+        '--kind', default='png', choices=sorted(IMAGE_KINDS),
+        help='Image kind (mtg also supports art_crop)')
+    p_cache.add_argument('--page-size', type=int, default=50)
+    # Selective filters
+    p_cache.add_argument('--set', dest='set_code', help='Set code (mh3, sv3, …)')
+    p_cache.add_argument('--type', help='MTG type line fragment or Pokémon type')
+    p_cache.add_argument('--types', help='Pokémon types CSV')
+    p_cache.add_argument('--rarity', help='Rarity filter')
     p_cache.add_argument(
-        '--status', action='store_true',
-        help='Show checkpoint progress for this TCG and exit')
-    p_cache.add_argument(
-        '--reset', action='store_true',
-        help='Delete the checkpoint/stop flag for this TCG and exit')
-    p_cache.add_argument(
-        '--fresh', action='store_true',
-        help='Ignore any previous checkpoint and start from the beginning')
-    p_cache.add_argument(
-        '--images-only', action='store_true',
-        help='Only download missing images for cards already in the local DB')
-    p_cache.add_argument(
-        '--no-images', action='store_true',
-        help='Store card JSON only; skip HQ image downloads')
-    p_cache.add_argument(
-        '--no-hydrate', action='store_true',
-        help='Riftbound: skip per-card detail fetch (faster, thinner JSON)')
-    p_cache.add_argument(
-        '--kind', default='png', choices=['png', 'large'],
-        help='Image kind to download (default: png → provider large scan)')
-    p_cache.add_argument(
-        '--page-size', type=int, default=50,
-        help='Catalog page size (default 50)')
+        '--art', help='MTG art flags CSV: showcase,borderless,extended,fullart,…')
+    p_cache.add_argument('--artist', help='MTG artist name')
+    p_cache.add_argument('--year', help='MTG release year')
+    p_cache.add_argument('--tags', help='Extra Scryfall fragments (otag:, is:, …)')
+    p_cache.add_argument('--subtype', help='Pokémon subtype (V, EX, …)')
+    p_cache.add_argument('--supertype', help='Pokémon / Trainer / Energy')
+    p_cache.add_argument('--regulation', help='Pokémon regulation mark (G, H, …)')
+    p_cache.add_argument('--name', help='Pokémon name substring')
+    p_cache.add_argument('--q', help='Raw provider query (advanced)')
 
     sub.add_parser('stats', help='Show card DB statistics')
 
@@ -122,24 +141,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.status:
             progress = load_checkpoint(checkpoint_path(CACHE_RUNS_DIR, game))
-            if not progress:
-                print(f'No checkpoint for {game}.')
-                return 0
-            print(json.dumps({
-                'game': progress.game,
-                'status': progress.status,
-                'mode': progress.mode,
-                'offset': progress.offset,
-                'page': progress.page,
-                'total_hint': progress.total_hint,
-                'stored': progress.stored,
-                'images_ok': progress.images_ok,
-                'images_skip': progress.images_skip,
-                'images_fail': progress.images_fail,
-                'updated_at': progress.updated_at,
-                'message': progress.message,
-                'db_count': db.count_by_game(game),
-            }, indent=2))
+            print(json.dumps(
+                progress_dict(progress, db_count=db.count_by_game(game)),
+                indent=2))
             return 0
         if args.stop:
             path = request_stop(CACHE_RUNS_DIR, game)
@@ -147,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             print('The running cache-game will exit after the current card.')
             return 0
 
+        filters = _filters_from_args(args)
         print(f'==> Caching {game} into {DATA_DIR} (images → {IMAGES_DIR})')
         print('    Rate-limited by default (safe for NAS IP). Stop with:')
         print('    docker exec proxyshop-web '
@@ -164,8 +169,9 @@ def main(argv: list[str] | None = None) -> int:
                 page_size=max(args.page_size, 1),
                 images_only=args.images_only,
                 fresh=args.fresh,
+                filters=filters,
             )
-        except (games.ProviderError, ValueError) as e:
+        except (games.ProviderError, ValueError, RuntimeError) as e:
             print(f'ERROR: {e}', file=sys.stderr)
             return 1
         return 0
@@ -174,8 +180,6 @@ def main(argv: list[str] | None = None) -> int:
         for k, v in db.stats().items():
             print(f'{k}: {v}')
         for g in games.GAMES:
-            if g == 'mtg':
-                continue
             print(f'cards[{g}]: {db.count_by_game(g)}')
         return 0
     return 1

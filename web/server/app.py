@@ -1039,7 +1039,7 @@ def health():
 
 
 """
-* Full-TCG cache (Riftbound / Union Arena)
+* Selective / full TCG cache (MTG, Pokémon, Riftbound, Union Arena)
 """
 
 
@@ -1054,34 +1054,91 @@ def _require_catalog_game(game: str) -> str:
 
 @app.get('/api/cache-game/{game}')
 def api_cache_game_status(request: Request, game: str):
-    """Status for a full-catalog cache run (checkpoint + live thread)."""
+    """Status for a cache run (checkpoint + live thread)."""
     rate_limit(request, 'api')
     game = _require_catalog_game(game)
     return cache_runner.status(game, db=carddb, runs_dir=CACHE_RUNS_DIR)
 
 
+@app.get('/api/cache-game/{game}/options')
+def api_cache_game_options(request: Request, game: str):
+    """Sets / filter option lists for the cache UI."""
+    rate_limit(request, 'api')
+    game = _require_catalog_game(game)
+    from web.shared.cache_filters import MTG_ART_FLAGS, MTG_RARITIES
+    if game == 'mtg':
+        return {
+            'game': game,
+            'selective': True,
+            'sets': carddb.list_scryfall_sets() if not OFFLINE else [],
+            'rarities': list(MTG_RARITIES),
+            'art_flags': list(MTG_ART_FLAGS),
+            'image_kinds': ['png', 'large', 'art_crop', 'border_crop'],
+        }
+    if game == 'pokemon':
+        meta = {} if OFFLINE else games.list_pokemon_meta()
+        return {
+            'game': game,
+            'selective': True,
+            'sets': [] if OFFLINE else games.list_pokemon_sets(),
+            'types': meta.get('types') or [],
+            'subtypes': meta.get('subtypes') or [],
+            'rarities': meta.get('rarities') or [],
+            'supertypes': meta.get('supertypes') or [],
+            'image_kinds': ['png', 'large'],
+        }
+    return {
+        'game': game,
+        'selective': False,
+        'sets': [],
+        'image_kinds': ['png', 'large'],
+    }
+
+
 @app.post('/api/cache-game/{game}/start')
-def api_cache_game_start(
+async def api_cache_game_start(
     request: Request,
     game: str,
     fresh: bool = False,
     images_only: bool = False,
 ):
-    """Start or resume caching a TCG catalog + HQ images in the background."""
+    """Start or resume caching cards + HQ images in the background.
+
+    Optional JSON body: ``{"filters": {...}, "kind": "png", "fresh": false}``.
+    MTG/Pokémon require at least one filter.
+    """
     rate_limit(request, 'cache')
     game = _require_catalog_game(game)
     if OFFLINE:
         raise HTTPException(
             status_code=503,
-            detail='Offline mode is on — full TCG cache needs the live provider')
-    return cache_runner.start(
-        game,
-        db=carddb,
-        images_dir=IMAGES_DIR,
-        runs_dir=CACHE_RUNS_DIR,
-        fresh=fresh,
-        images_only=images_only,
-    )
+            detail='Offline mode is on — TCG cache needs the live provider')
+    body: dict = {}
+    try:
+        raw = await request.body()
+        if raw:
+            body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=422, detail='Invalid JSON body')
+    if not isinstance(body, dict):
+        body = {}
+    filters = body.get('filters') if isinstance(body.get('filters'), dict) else {}
+    kind = str(body.get('kind') or 'png')
+    fresh = bool(body.get('fresh')) if 'fresh' in body else fresh
+    images_only = bool(body.get('images_only')) if 'images_only' in body else images_only
+    try:
+        return cache_runner.start(
+            game,
+            db=carddb,
+            images_dir=IMAGES_DIR,
+            runs_dir=CACHE_RUNS_DIR,
+            fresh=fresh,
+            images_only=images_only,
+            filters=filters,
+            image_kind=kind,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.post('/api/cache-game/{game}/stop')

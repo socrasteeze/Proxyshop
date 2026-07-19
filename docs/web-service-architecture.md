@@ -103,8 +103,18 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
       python -m web.server.manage cache-game --game riftbound --status
   ```
 
-  Or use **Search → pick Riftbound/Union Arena → Cache all cards** in the
-  browser (same stop/resume checkpoints under `/data/cache-runs/`).
+  Or use **Search → Offline cache** in the browser (same stop/resume
+  checkpoints under `/data/cache-runs/`). **MTG** and **Pokémon** require
+  filters (set, type, rarity, art/frame flags, tags, regulation, …) so the
+  cache does not pull an entire game; Riftbound/Union Arena can still mirror
+  their full catalogs. Examples:
+
+  ```bash
+  docker exec -it proxyshop-web python -m web.server.manage cache-game \
+      --game mtg --set mh3 --art showcase,borderless
+  docker exec -it proxyshop-web python -m web.server.manage cache-game \
+      --game pokemon --set sv3 --type Fire
+  ```
 
   Bulk cache is rate-limited by default (provider spacing ≈0.35s, page gap
   ≈0.75s, per-card/image gap ≈0.4s) and retries HTTP 429 with `Retry-After`.
@@ -114,8 +124,8 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
 
   Re-run the start command to resume from the checkpoint under
   `/data/cache-runs/`. Use `--fresh` to start over, `--images-only` to fill
-  missing images for cards already in the DB, or `--game union-arena` when
-  apitcg's catalog is healthy. Riftbound uses public RiftScribe (no key).
+  missing images for cards already in the DB. Riftbound uses public RiftScribe
+  (no key). Full MTG dumps still use `manage bulk-download`.
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
   Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when

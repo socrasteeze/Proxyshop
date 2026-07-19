@@ -31,12 +31,96 @@
      data-offline="{{ '1' if offline else '0' }}">
   <h2>Offline cache</h2>
   <p class="muted">
-    Download the full <span data-cache-label></span> catalog and HQ images into this NAS.
-    Safe to stop and resume later. Requests are rate-limited so providers are less
-    likely to block this NAS IP.
+    Download matching <span data-cache-label></span> cards and HQ images onto this NAS.
+    MTG and Pokémon need filters (set / type / art / …) so you don’t pull everything.
+    Safe to stop and resume; requests are rate-limited.
   </p>
-  <div class="btn-row">
-    <button type="button" id="cache-start">Cache all cards</button>
+
+  <div id="cache-filters-mtg" class="cache-filters" hidden>
+    <div class="field-row field-row--3">
+      <label>Set code
+        <input id="cf-mtg-set" list="cf-mtg-sets" placeholder="mh3" autocomplete="off">
+        <datalist id="cf-mtg-sets"></datalist>
+      </label>
+      <label>Type
+        <input id="cf-mtg-type" placeholder="creature" autocomplete="off">
+      </label>
+      <label>Rarity
+        <select id="cf-mtg-rarity">
+          <option value="">Any</option>
+        </select>
+      </label>
+    </div>
+    <div class="field-row field-row--3" style="margin-top:.7rem">
+      <label>Art / frame
+        <select id="cf-mtg-art" multiple size="4"></select>
+      </label>
+      <label>Artist
+        <input id="cf-mtg-artist" placeholder="Chris Rahn" autocomplete="off">
+      </label>
+      <label>Year
+        <input id="cf-mtg-year" placeholder="2024" inputmode="numeric" autocomplete="off">
+      </label>
+    </div>
+    <div class="field-row" style="margin-top:.7rem">
+      <label>Extra Scryfall tags
+        <input id="cf-mtg-tags" placeholder='otag:illustrated is:foil' autocomplete="off">
+      </label>
+      <label>Custom q (advanced)
+        <input id="cf-mtg-q" placeholder="optional raw query fragment" autocomplete="off">
+      </label>
+    </div>
+    <label style="margin-top:.7rem;display:block">Image kind
+      <select id="cf-mtg-kind">
+        <option value="png">HQ scan (png)</option>
+        <option value="large">Large JPG</option>
+        <option value="art_crop">Art crop</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="cache-filters-pokemon" class="cache-filters" hidden>
+    <div class="field-row field-row--3">
+      <label>Set id
+        <input id="cf-pkm-set" list="cf-pkm-sets" placeholder="sv3" autocomplete="off">
+        <datalist id="cf-pkm-sets"></datalist>
+      </label>
+      <label>Type
+        <select id="cf-pkm-type"><option value="">Any</option></select>
+      </label>
+      <label>Supertype
+        <select id="cf-pkm-supertype"><option value="">Any</option></select>
+      </label>
+    </div>
+    <div class="field-row field-row--3" style="margin-top:.7rem">
+      <label>Subtype
+        <input id="cf-pkm-subtype" list="cf-pkm-subtypes" placeholder="V, EX…" autocomplete="off">
+        <datalist id="cf-pkm-subtypes"></datalist>
+      </label>
+      <label>Rarity
+        <input id="cf-pkm-rarity" list="cf-pkm-rarities" placeholder="Rare Holo" autocomplete="off">
+        <datalist id="cf-pkm-rarities"></datalist>
+      </label>
+      <label>Regulation
+        <input id="cf-pkm-regulation" placeholder="G" maxlength="2" autocomplete="off">
+      </label>
+    </div>
+    <div class="field-row" style="margin-top:.7rem">
+      <label>Name contains
+        <input id="cf-pkm-name" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Custom q (advanced)
+        <input id="cf-pkm-q" placeholder="optional raw Lucene query" autocomplete="off">
+      </label>
+    </div>
+  </div>
+
+  <div id="cache-filters-small" class="cache-filters" hidden>
+    <p class="muted">Caches the full published catalog for this game.</p>
+  </div>
+
+  <div class="btn-row" style="margin-top:1rem">
+    <button type="button" id="cache-start">Cache matching cards</button>
     <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume</button>
     <button type="button" class="btn-danger" id="cache-stop" hidden>Stop</button>
     <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start over</button>
@@ -105,18 +189,111 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnStop = document.getElementById('cache-stop');
   const btnFresh = document.getElementById('cache-fresh');
   const labelEl = panel.querySelector('[data-cache-label]');
+  const filtMtg = document.getElementById('cache-filters-mtg');
+  const filtPkm = document.getElementById('cache-filters-pokemon');
+  const filtSmall = document.getElementById('cache-filters-small');
   let pollTimer = null;
+  let optionsCache = {};
+
+  function fillDatalist(el, rows, idKey='id', nameKey='name') {
+    el.innerHTML = '';
+    (rows || []).forEach((row) => {
+      const opt = document.createElement('option');
+      const id = row[idKey] || row;
+      const name = row[nameKey] || id;
+      opt.value = id;
+      opt.label = `${id} — ${name}`;
+      el.appendChild(opt);
+    });
+  }
+
+  function fillSelect(el, values, keepAny) {
+    const current = el.value;
+    el.innerHTML = keepAny ? '<option value="">Any</option>' : '';
+    (values || []).forEach((v) => {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      el.appendChild(opt);
+    });
+    if ([...el.options].some((o) => o.value === current)) el.value = current;
+  }
+
+  async function loadOptions(g) {
+    if (optionsCache[g]) return optionsCache[g];
+    const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/options`);
+    if (!res.ok) return null;
+    const body = await res.json();
+    optionsCache[g] = body;
+    if (g === 'mtg') {
+      fillDatalist(document.getElementById('cf-mtg-sets'), body.sets || []);
+      fillSelect(document.getElementById('cf-mtg-rarity'), body.rarities || [], true);
+      const art = document.getElementById('cf-mtg-art');
+      art.innerHTML = '';
+      (body.art_flags || []).forEach((f) => {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        art.appendChild(opt);
+      });
+    }
+    if (g === 'pokemon') {
+      fillDatalist(document.getElementById('cf-pkm-sets'), body.sets || []);
+      fillSelect(document.getElementById('cf-pkm-type'), body.types || [], true);
+      fillSelect(document.getElementById('cf-pkm-supertype'), body.supertypes || [], true);
+      fillDatalist(document.getElementById('cf-pkm-subtypes'),
+        (body.subtypes || []).map((s) => ({ id: s, name: s })));
+      fillDatalist(document.getElementById('cf-pkm-rarities'),
+        (body.rarities || []).map((s) => ({ id: s, name: s })));
+    }
+    return body;
+  }
+
+  function collectFilters(g) {
+    if (g === 'mtg') {
+      const art = [...document.getElementById('cf-mtg-art').selectedOptions].map((o) => o.value);
+      return {
+        set: document.getElementById('cf-mtg-set').value.trim(),
+        type: document.getElementById('cf-mtg-type').value.trim(),
+        rarity: document.getElementById('cf-mtg-rarity').value.trim(),
+        art,
+        artist: document.getElementById('cf-mtg-artist').value.trim(),
+        year: document.getElementById('cf-mtg-year').value.trim(),
+        tags: document.getElementById('cf-mtg-tags').value.trim(),
+        q: document.getElementById('cf-mtg-q').value.trim(),
+      };
+    }
+    if (g === 'pokemon') {
+      return {
+        set: document.getElementById('cf-pkm-set').value.trim(),
+        types: document.getElementById('cf-pkm-type').value.trim(),
+        subtypes: document.getElementById('cf-pkm-subtype').value.trim(),
+        rarity: document.getElementById('cf-pkm-rarity').value.trim(),
+        supertype: document.getElementById('cf-pkm-supertype').value.trim(),
+        regulation: document.getElementById('cf-pkm-regulation').value.trim(),
+        name: document.getElementById('cf-pkm-name').value.trim(),
+        q: document.getElementById('cf-pkm-q').value.trim(),
+      };
+    }
+    return {};
+  }
+
+  function imageKind(g) {
+    if (g === 'mtg') return document.getElementById('cf-mtg-kind').value || 'png';
+    return 'png';
+  }
 
   function formatStatus(body) {
     if (!body || body.status === 'idle') {
       return offline
         ? 'Offline mode is on — caching needs a live provider.'
-        : 'Not started yet. Caching stores card data and HQ images for offline use.';
+        : 'Pick filters (for MTG/Pokémon), then cache. Progress is resumable.';
     }
     const parts = [
       body.running ? 'Running' : (body.status || 'idle'),
       `cards in DB: ${body.db_count ?? 0}`,
     ];
+    if (body.query_label) parts.push(`query: ${body.query_label}`);
     if (body.stored != null) parts.push(`stored this run: ${body.stored}`);
     if (body.images_ok != null) {
       parts.push(`images ok/skip/fail: ${body.images_ok}/${body.images_skip}/${body.images_fail}`);
@@ -131,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const running = !!(body && body.running);
     const stopped = body && body.status === 'stopped';
     const done = body && body.status === 'done';
-    btnStart.hidden = running || stopped || done;
+    btnStart.hidden = running || stopped;
     btnResume.hidden = !(stopped && !running);
     btnStop.hidden = !running;
     btnFresh.hidden = !(done || stopped) || running;
@@ -161,10 +338,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function postCache(path, fresh) {
     const g = game.value;
-    const url = `/api/cache-game/${encodeURIComponent(g)}/${path}`
-      + (fresh ? '?fresh=1' : '');
+    const url = `/api/cache-game/${encodeURIComponent(g)}/${path}`;
     statusEl.textContent = path === 'stop' ? 'Stopping…' : 'Starting…';
-    const res = await fetch(url, { method: 'POST' });
+    const opts = { method: 'POST' };
+    if (path === 'start') {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify({
+        filters: collectFilters(g),
+        kind: imageKind(g),
+        fresh: !!fresh,
+      });
+    }
+    const res = await fetch(url, opts);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       statusEl.textContent = body.detail || `Request failed (${res.status})`;
@@ -173,9 +358,19 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.textContent = formatStatus(body);
     applyButtons(body);
     if (body.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
+    setTimeout(refreshStatus, 800);
   }
 
-  function syncPanel() {
+  function syncFilters(g) {
+    filtMtg.hidden = g !== 'mtg';
+    filtPkm.hidden = g !== 'pokemon';
+    filtSmall.hidden = !(g === 'riftbound' || g === 'union-arena');
+    btnStart.textContent = (g === 'mtg' || g === 'pokemon')
+      ? 'Cache matching cards'
+      : 'Cache all cards';
+  }
+
+  async function syncPanel() {
     const g = game.value;
     const show = catalog.includes(g);
     panel.hidden = !show;
@@ -184,13 +379,15 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     labelEl.textContent = labels[g] || g;
+    syncFilters(g);
+    try { await loadOptions(g); } catch (e) { /* options optional offline */ }
     refreshStatus();
   }
 
   btnStart.addEventListener('click', () => postCache('start', false));
   btnResume.addEventListener('click', () => postCache('start', false));
   btnFresh.addEventListener('click', () => {
-    if (!confirm(`Start over and re-cache all ${labels[game.value] || game.value} cards?`)) return;
+    if (!confirm(`Start over and re-cache ${labels[game.value] || game.value} with the current filters?`)) return;
     postCache('start', true);
   });
   btnStop.addEventListener('click', () => postCache('stop', false));

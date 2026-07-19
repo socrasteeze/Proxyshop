@@ -188,3 +188,63 @@ class TestCacheGameResume:
         assert progress.status == 'done'
         assert progress.images_skip == 1
         assert calls['n'] == 0
+
+    def test_mtg_rejects_empty_filters(self, carddb, tmp_path):
+        with pytest.raises(ValueError, match='filter'):
+            game_cache.run_cache_game(
+                db=carddb,
+                game='mtg',
+                images_dir=tmp_path / 'images',
+                runs_dir=tmp_path / 'runs',
+                filters={},
+                print_fn=lambda *a, **k: None,
+            )
+
+    def test_mtg_paginated_cache(self, carddb, tmp_path, monkeypatch):
+        pages = {
+            1: ([{
+                'object': 'card', 'id': 'scry-1', 'name': 'Bolt',
+                'set': 'lea', 'collector_number': '161', 'lang': 'en',
+                'image_uris': {'png': 'https://cdn.example/1.png'},
+            }], 2, True),
+            2: ([{
+                'object': 'card', 'id': 'scry-2', 'name': 'Bolt2',
+                'set': 'lea', 'collector_number': '162', 'lang': 'en',
+                'image_uris': {'png': 'https://cdn.example/2.png'},
+            }], 2, False),
+        }
+
+        def fake_page(query, page=1, store=False):
+            return pages[page]
+
+        monkeypatch.setattr(carddb, 'list_scryfall_page', fake_page)
+        monkeypatch.setattr(game_cache.images, 'ensure_image', lambda *a, **k: None)
+
+        class Watch:
+            def __init__(self, runs_dir, game, *, use_signals=True):
+                self.runs_dir = runs_dir
+                self.game = game
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def check(self):
+                return None
+
+        monkeypatch.setattr(game_cache, '_StopWatch', Watch)
+        progress = game_cache.run_cache_game(
+            db=carddb,
+            game='mtg',
+            images_dir=tmp_path / 'images',
+            runs_dir=tmp_path / 'runs',
+            filters={'set': 'lea'},
+            fresh=True,
+            print_fn=lambda *a, **k: None,
+        )
+        assert progress.status == 'done'
+        assert progress.stored == 2
+        assert 'set:lea' in progress.query
+        assert carddb.count_by_game('mtg') == 2

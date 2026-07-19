@@ -518,12 +518,21 @@ class TestCacheGameApi:
         assert body['db_count'] == 0
 
     def test_unknown_game_422(self, client):
-        assert client.get('/api/cache-game/mtg').status_code == 422
-        assert client.post('/api/cache-game/mtg/start').status_code == 422
+        assert client.get('/api/cache-game/yugioh').status_code == 422
+        assert client.post('/api/cache-game/yugioh/start').status_code == 422
 
     def test_start_blocked_when_offline(self, client):
         res = client.post('/api/cache-game/riftbound/start')
         assert res.status_code == 503
+
+    def test_mtg_requires_filters(self, appmod, client):
+        appmod.OFFLINE = False
+        res = client.post(
+            '/api/cache-game/mtg/start',
+            content=b'{"filters":{}}',
+            headers={'Content-Type': 'application/json'})
+        assert res.status_code == 422
+        assert 'filter' in res.json()['detail'].lower()
 
     def test_start_stop_with_stub(self, appmod, client, monkeypatch):
         appmod.OFFLINE = False
@@ -535,7 +544,7 @@ class TestCacheGameApi:
             return {
                 'game': game, 'status': 'running', 'running': True,
                 'stored': 0, 'images_ok': 0, 'images_skip': 0, 'images_fail': 0,
-                'db_count': 0,
+                'db_count': 0, 'filters': kwargs.get('filters') or {},
             }
 
         def fake_stop(game, **kwargs):
@@ -548,10 +557,13 @@ class TestCacheGameApi:
 
         monkeypatch.setattr(appmod.cache_runner, 'start', fake_start)
         monkeypatch.setattr(appmod.cache_runner, 'stop', fake_stop)
-        body = client.post('/api/cache-game/riftbound/start').json()
+        body = client.post(
+            '/api/cache-game/mtg/start',
+            content=b'{"filters":{"set":"mh3"}}',
+            headers={'Content-Type': 'application/json'}).json()
         assert body['running'] is True
         assert started['n'] == 1
-        body = client.post('/api/cache-game/riftbound/stop').json()
+        body = client.post('/api/cache-game/mtg/stop').json()
         assert body['status'] == 'stopped'
         assert stopped['n'] == 1
 
@@ -559,4 +571,4 @@ class TestCacheGameApi:
         res = client.get('/search', params={'game': 'riftbound'})
         assert res.status_code == 200
         assert 'id="cache-panel"' in res.text
-        assert 'Cache all cards' in res.text
+        assert 'Cache' in res.text

@@ -496,6 +496,66 @@ class CardDB:
         self._conn().commit()
         return cards
 
+    def list_scryfall_page(
+        self,
+        query: str,
+        page: int = 1,
+        *,
+        store: bool = False,
+    ) -> tuple[list[dict], Optional[int], bool]:
+        """Fetch one Scryfall search page (175 cards). Does not auto-cache unless store=True.
+
+        Returns (cards, total_cards, has_more).
+        """
+        if self.offline:
+            return [], None, False
+        page = max(int(page), 1)
+        res = self.session.get(
+            f'{SCRYFALL_API}/cards/search',
+            params={'q': query, 'page': page, 'order': 'set'})
+        if res.status_code == 404:
+            return [], 0, False
+        if res.status_code != 200:
+            body = (res.text or '')[:200].strip()
+            raise RuntimeError(
+                f'Scryfall HTTP {res.status_code}'
+                + (f': {body}' if body else ''))
+        data = res.json()
+        if data.get('object') == 'error':
+            raise RuntimeError(str(data.get('details') or data.get('code') or 'Scryfall error'))
+        cards = [c for c in data.get('data', []) if c.get('object') == 'card']
+        if store:
+            for card in cards:
+                self.store_card(card, commit=False, game='mtg')
+            self._conn().commit()
+        total = data.get('total_cards')
+        try:
+            total_i = int(total) if total is not None else None
+        except (TypeError, ValueError):
+            total_i = None
+        return cards, total_i, bool(data.get('has_more'))
+
+    def list_scryfall_sets(self) -> list[dict]:
+        """Return compact Scryfall set list for cache UI pickers."""
+        if self.offline:
+            return []
+        res = self.session.get(f'{SCRYFALL_API}/sets')
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        rows = []
+        for s in data.get('data') or []:
+            if not isinstance(s, dict) or not s.get('code'):
+                continue
+            rows.append({
+                'id': s.get('code'),
+                'name': s.get('name') or s.get('code'),
+                'released_at': s.get('released_at'),
+                'card_count': s.get('card_count'),
+                'set_type': s.get('set_type'),
+            })
+        return rows
+
     """
     * Batch Resolution (deck imports)
     """

@@ -44,10 +44,24 @@ def start(
     runs_dir: Path,
     fresh: bool = False,
     images_only: bool = False,
+    filters: Optional[dict] = None,
+    image_kind: str = 'png',
 ) -> dict:
     """Start or resume a cache run in the background."""
     if game not in games.CATALOG_GAMES:
         raise ValueError(f'Unsupported game {game!r}')
+    # Validate filters synchronously so the UI gets a 422 instead of a silent thread error
+    from web.shared.cache_filters import (
+        SELECTIVE_GAMES, build_provider_query, filters_require_selection,
+        normalize_filters)
+    if not images_only and game in SELECTIVE_GAMES:
+        norm = normalize_filters(game, filters)
+        if filters_require_selection(game, norm):
+            raise ValueError(
+                f'{game} cache needs filters (set, type, rarity, art, …) '
+                'so it does not dump the entire catalog')
+        build_provider_query(game, norm)
+
     with _lock:
         if is_running(game):
             return status(game, db=db, runs_dir=runs_dir)
@@ -62,6 +76,8 @@ def start(
                     runs_dir=runs_dir,
                     fresh=fresh,
                     images_only=images_only,
+                    filters=filters,
+                    image_kind=image_kind,
                     use_signals=False,
                     print_fn=lambda *a, **k: None,
                 )

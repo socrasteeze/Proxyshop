@@ -1,8 +1,8 @@
 """
-* Full-catalog cache for small TCGs (Riftbound, Union Arena)
+* Selective / full-catalog cache for TCGs
 * Stores provider cards into the local SQLite DB and optionally downloads
-* HQ images under /data/images/. Checkpoints progress so NAS runs can stop
-* and resume safely.
+* HQ images under /data/images/. MTG and Pokémon require filters so dumps
+* stay scoped. Checkpoints progress so NAS runs can stop and resume safely.
 * Must never import from `src/`.
 """
 # Standard Library Imports
@@ -16,6 +16,9 @@ from typing import Optional
 
 # Local Imports
 from web.shared import games, images
+from web.shared.cache_filters import (
+    CACHEABLE_GAMES, SELECTIVE_GAMES, build_provider_query, describe_filters,
+    filters_equal, filters_require_selection, normalize_filters)
 from web.shared.carddb import CardDB
 
 STOP_SUFFIX = '.stop'
@@ -38,7 +41,7 @@ class CacheProgress:
     status: str = 'running'        # running | stopped | done
     offset: int = 0                # catalog offset or DB offset
     page_size: int = 50
-    page: int = 1                  # 1-based (Union Arena)
+    page: int = 1                  # 1-based pages (UA / Pokémon / Scryfall)
     total_hint: Optional[int] = None
     stored: int = 0
     images_ok: int = 0
@@ -47,8 +50,14 @@ class CacheProgress:
     hydrate: bool = True
     download_images: bool = True
     image_kind: str = 'png'
+    filters: dict = None  # type: ignore[assignment]
+    query: str = ''
     updated_at: str = ''
     message: str = ''
+
+    def __post_init__(self) -> None:
+        if self.filters is None:
+            self.filters = {}
 
     def touch(self, message: str = '') -> None:
         self.updated_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -166,6 +175,10 @@ def progress_dict(progress: Optional[CacheProgress], *, db_count: int = 0, runni
         'images_ok': progress.images_ok,
         'images_skip': progress.images_skip,
         'images_fail': progress.images_fail,
+        'filters': progress.filters or {},
+        'query': progress.query or '',
+        'query_label': describe_filters(
+            progress.game, progress.filters or {}, progress.query or ''),
         'updated_at': progress.updated_at,
         'message': progress.message,
         'db_count': db_count,
@@ -189,16 +202,38 @@ def _polite_sleep(seconds: float, watch: Optional['_StopWatch'] = None) -> None:
 def _fetch_catalog_page(
     game: str,
     progress: CacheProgress,
-) -> tuple[list[dict], Optional[int]]:
+    db: CardDB,
+) -> tuple[list[dict], Optional[int], bool]:
+    """Return (cards, total_hint, has_more)."""
     if game == 'riftbound':
-        return games.list_riftbound_page(
+        cards, total = games.list_riftbound_page(
             offset=progress.offset,
             limit=progress.page_size,
             hydrate=progress.hydrate)
+        has_more = bool(cards) and (
+            total is None or progress.offset + len(cards) < (total or 0))
+        if cards and len(cards) < progress.page_size:
+            has_more = False
+        if not cards:
+            has_more = False
+        return cards, total, has_more
     if game == 'union-arena':
-        return games.list_union_arena_page(
+        cards, total = games.list_union_arena_page(
             page=progress.page,
             limit=progress.page_size)
+        return cards, total, len(cards) >= progress.page_size
+    if game == 'mtg':
+        return db.list_scryfall_page(progress.query, page=progress.page, store=False)
+    if game == 'pokemon':
+        cards, total = games.list_pokemon_page(
+            progress.query,
+            page=progress.page,
+            page_size=min(progress.page_size, 250))
+        if not cards:
+            return cards, total, False
+        if total is not None:
+            return cards, total, (progress.page * min(progress.page_size, 250)) < total
+        return cards, total, len(cards) >= min(progress.page_size, 250)
     raise games.ProviderError(f'No catalog provider for game {game!r}')
 
 
@@ -242,30 +277,69 @@ def run_cache_game(
     page_size: int = 50,
     images_only: bool = False,
     fresh: bool = False,
+    filters: Optional[dict] = None,
     use_signals: bool = True,
     print_fn=print,
 ) -> CacheProgress:
-    """Cache a TCG catalog (+ images) with stop/resume support."""
-    if game not in games.CATALOG_GAMES:
+    """Cache a TCG catalog (+ images) with stop/resume support.
+
+    MTG and Pokémon require selective filters (set/type/rarity/…). Small TCGs
+    (Riftbound/Union Arena) may run unfiltered full-catalog mirrors.
+    """
+    game = (game or '').strip().lower()
+    if game not in CACHEABLE_GAMES and game not in games.CATALOG_GAMES:
         raise ValueError(
             f'Unsupported game {game!r}; choose from: '
             + ', '.join(games.CATALOG_GAMES))
     if image_kind not in images.IMAGE_KINDS:
         raise ValueError(f'Unknown image kind {image_kind!r}')
 
+    # Scryfall pages are fixed at 175; Pokémon max pageSize is 250
+    if game == 'mtg':
+        page_size = 175
+    elif game == 'pokemon':
+        page_size = min(max(page_size, 1), 250)
+
+    norm_filters = normalize_filters(game, filters)
+    query = ''
+    if not images_only and game in SELECTIVE_GAMES:
+        if filters_require_selection(game, norm_filters):
+            raise ValueError(
+                f'{game} cache needs filters (set, type, rarity, art, …) '
+                'so it does not dump the entire catalog')
+        query = build_provider_query(game, norm_filters)
+    elif not images_only and game in ('riftbound', 'union-arena'):
+        query = norm_filters.get('q') or ''
+
     runs_dir.mkdir(parents=True, exist_ok=True)
     images_dir.mkdir(parents=True, exist_ok=True)
     ck_path = checkpoint_path(runs_dir, game)
 
+    progress = load_checkpoint(ck_path)
+    if progress and not fresh and not filters_equal(progress.filters, norm_filters):
+        if progress.status in ('running', 'stopped') and (progress.stored or progress.offset or progress.page > 1):
+            raise ValueError(
+                f'Active {game} checkpoint uses different filters '
+                f'({describe_filters(game, progress.filters or {}, progress.query)}). '
+                'Resume that run, or pass fresh=True / --fresh to start a new filter.')
+        # Done (or empty) checkpoint with different filters → start new
+        fresh = True
+
     if fresh:
         reset_checkpoint(runs_dir, game)
+        progress = None
 
-    progress = load_checkpoint(ck_path)
     if progress and progress.status == 'done' and not fresh:
-        print_fn(f'==> {game}: previous run already done. Use --fresh to start over.')
-        return progress
+        if filters_equal(progress.filters, norm_filters):
+            print_fn(
+                f'==> {game}: previous run already done for this filter. '
+                'Use --fresh to start over.')
+            return progress
+        fresh = True
+        reset_checkpoint(runs_dir, game)
+        progress = None
 
-    if progress is None or fresh:
+    if progress is None:
         progress = CacheProgress(
             game=game,
             mode='images-only' if images_only else 'catalog',
@@ -273,9 +347,10 @@ def run_cache_game(
             hydrate=hydrate,
             download_images=download_images,
             image_kind=image_kind,
+            filters=norm_filters,
+            query=query,
         )
     else:
-        # Resume: keep counters/offset; refresh operator options
         progress.mode = 'images-only' if images_only else progress.mode
         if images_only:
             progress.mode = 'images-only'
@@ -283,14 +358,23 @@ def run_cache_game(
         progress.download_images = download_images
         progress.image_kind = image_kind
         progress.page_size = page_size
+        progress.filters = progress.filters or norm_filters
+        if not progress.query:
+            progress.query = query
+        if game in SELECTIVE_GAMES and not images_only and not progress.query:
+            progress.query = build_provider_query(game, progress.filters)
         progress.status = 'running'
+        label = (
+            f'page {progress.page}'
+            if game != 'riftbound'
+            else f'offset {progress.offset}')
         print_fn(
-            f'==> Resuming {game} from '
-            f'{"page " + str(progress.page) if game == "union-arena" and progress.mode == "catalog" else "offset " + str(progress.offset)} '
-            f'(stored={progress.stored}, images_ok={progress.images_ok})')
+            f'==> Resuming {game} ({describe_filters(game, progress.filters, progress.query)}) '
+            f'from {label} (stored={progress.stored}, images_ok={progress.images_ok})')
 
     progress.touch('starting')
     save_checkpoint(ck_path, progress)
+    print_fn(f'==> Query: {progress.query or "(full catalog)"}')
 
     prev_provider = games._provider_limiter.min_interval
     prev_image = getattr(db.session, '_min_interval', None)
@@ -317,10 +401,12 @@ def run_cache_game(
         progress.touch(str(e))
         save_checkpoint(ck_path, progress)
         clear_stop(runs_dir, game)
+        label = (
+            f'page {progress.page}'
+            if game != 'riftbound'
+            else f'offset {progress.offset}')
         print_fn(
-            f'==> Stopped {game} at '
-            f'{"page " + str(progress.page) if game == "union-arena" and progress.mode == "catalog" else "offset " + str(progress.offset)}. '
-            f'Re-run the same command to resume.')
+            f'==> Stopped {game} at {label}. Re-run the same command to resume.')
     except Exception as e:
         progress.status = 'stopped'
         progress.touch(f'error: {e}')
@@ -344,12 +430,11 @@ def _run_catalog(
     empty_pages = 0
     while True:
         watch.check()
-        cards, total = _fetch_catalog_page(progress.game, progress)
+        cards, total, has_more = _fetch_catalog_page(progress.game, progress, db)
         if total is not None:
             progress.total_hint = total
         if not cards:
             empty_pages += 1
-            # Union Arena page APIs may return empty before we know we're done
             if progress.game == 'union-arena' and empty_pages < 2:
                 progress.page += 1
                 save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
@@ -362,14 +447,8 @@ def _run_catalog(
             _store_and_image(db, images_dir, card, progress, watch)
         if progress.game == 'riftbound':
             progress.offset += len(cards)
-            if progress.total_hint is not None and progress.offset >= progress.total_hint:
-                break
-            if len(cards) < progress.page_size:
-                break
         else:
             progress.page += 1
-            if len(cards) < progress.page_size:
-                break
         save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
         label = (
             f'offset={progress.offset}'
@@ -379,6 +458,8 @@ def _run_catalog(
         print_fn(
             f'… {progress.game} {label}{total_bit} '
             f'stored={progress.stored} images_ok={progress.images_ok}')
+        if not has_more:
+            break
         _polite_sleep(CACHE_PAGE_INTERVAL, watch)
 
 
