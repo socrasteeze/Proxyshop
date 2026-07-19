@@ -353,13 +353,29 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   text-overflow: ellipsis;
 }
 .typeahead-empty { padding: .7rem .8rem; }
-.set-picker { width: 100%; }
+.cache-filters,
+.cache-filters .field-row,
+.cache-filters label {
+  overflow: visible;
+}
+.panel:has(.cache-filters) {
+  overflow: visible;
+}
+.set-picker {
+  width: 100%;
+  position: relative;
+  z-index: 5;
+}
+.set-picker-shell { width: 100%; }
 .set-picker-hint {
   margin-top: .35rem;
   font-size: .78rem;
   line-height: 1.35;
 }
-.set-picker-drop { max-height: 320px; }
+.set-picker-drop {
+  max-height: 320px;
+  z-index: 80;
+}
 .set-picker-code {
   flex: 0 0 4.2rem;
   font: 600 .78rem/1.2 ui-monospace, Consolas, monospace;

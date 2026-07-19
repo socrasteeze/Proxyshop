@@ -37,6 +37,7 @@ def make_card(
         'collector_number': number,
         'lang': lang,
         'released_at': released,
+        'set_name': set_code.upper(),
         'layout': 'normal',
     }
 

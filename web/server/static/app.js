@@ -206,26 +206,31 @@ function wireSetPicker(input, opts = {}) {
   if (!input) return null;
   const getItems = opts.getItems || (() => []);
   const onSelect = opts.onSelect || (() => {});
-  const minChars = opts.minChars ?? 1;
+  const minChars = opts.minChars ?? 0;
   const limit = opts.limit ?? 12;
 
+  // Outer holds hint; inner is the positioned typeahead shell so the dropdown
+  // sits under the input even when the hint is visible.
+  const outer = document.createElement('div');
+  outer.className = 'set-picker';
   const wrap = document.createElement('div');
-  wrap.className = 'typeahead set-picker';
-  input.parentNode.insertBefore(wrap, input);
+  wrap.className = 'typeahead set-picker-shell';
+  input.parentNode.insertBefore(outer, input);
+  outer.appendChild(wrap);
   wrap.appendChild(input);
   input.removeAttribute('list');
   input.setAttribute('autocomplete', 'off');
   input.setAttribute('spellcheck', 'false');
 
-  const hint = document.createElement('div');
-  hint.className = 'set-picker-hint muted';
-  hint.hidden = true;
-  wrap.appendChild(hint);
-
   const drop = document.createElement('div');
   drop.className = 'typeahead-drop set-picker-drop';
   drop.hidden = true;
   wrap.appendChild(drop);
+
+  const hint = document.createElement('div');
+  hint.className = 'set-picker-hint muted';
+  hint.hidden = true;
+  outer.appendChild(hint);
 
   let items = [];
   let active = -1;
@@ -280,10 +285,7 @@ function wireSetPicker(input, opts = {}) {
   function filter(q) {
     const needle = q.trim().toLowerCase();
     const pool = getItems() || [];
-    if (!needle) {
-      // Show a short recent/default slice when focused with empty query
-      return pool.slice(0, limit);
-    }
+    if (!needle) return pool.slice(0, limit);
     return pool
       .map((row) => ({ row, score: rank(needle, row) }))
       .filter((x) => x.score < 9)
@@ -295,8 +297,12 @@ function wireSetPicker(input, opts = {}) {
   function render(rows) {
     items = rows;
     active = rows.length ? 0 : -1;
+    const pool = getItems() || [];
     if (!rows.length) {
-      drop.innerHTML = '<div class="typeahead-empty muted">No matching sets</div>';
+      const msg = pool.length
+        ? 'No matching sets'
+        : 'No sets loaded — type a set code';
+      drop.innerHTML = `<div class="typeahead-empty muted">${msg}</div>`;
       drop.hidden = false;
       return;
     }
@@ -325,7 +331,7 @@ function wireSetPicker(input, opts = {}) {
 
   function openForQuery() {
     const q = input.value.trim();
-    if (q.length < minChars && q.length > 0) {
+    if (minChars > 0 && q.length > 0 && q.length < minChars) {
       close();
       return;
     }
@@ -342,7 +348,13 @@ function wireSetPicker(input, opts = {}) {
     showHint(hit || null);
   }
 
+  function refresh() {
+    syncHintFromValue();
+    if (document.activeElement === input || !drop.hidden) openForQuery();
+  }
+
   input.addEventListener('focus', openForQuery);
+  input.addEventListener('click', openForQuery);
   input.addEventListener('input', () => {
     syncHintFromValue();
     openForQuery();
@@ -370,10 +382,10 @@ function wireSetPicker(input, opts = {}) {
     setTimeout(() => {
       close();
       syncHintFromValue();
-    }, 120);
+    }, 150);
   });
 
-  return { syncHintFromValue, openForQuery };
+  return { syncHintFromValue, openForQuery, refresh };
 }
 
 /** Delete a job; returns true on success. Optionally remove a DOM row. */

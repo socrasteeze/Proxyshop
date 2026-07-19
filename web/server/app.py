@@ -1166,24 +1166,59 @@ def api_cache_game_options(request: Request, game: str):
     game = _require_catalog_game(game)
     from web.shared.cache_filters import MTG_ART_FLAGS, MTG_RARITIES
     if game == 'mtg':
+        # Always try local/cached sets first so the picklist isn't empty while
+        # (or if) the live Scryfall /sets call is slow.
+        sets: list = []
+        try:
+            sets = carddb.list_scryfall_sets()
+        except Exception:  # noqa: BLE001 — UI still works without live sets
+            try:
+                sets = carddb.list_local_mtg_sets()
+            except Exception:  # noqa: BLE001
+                sets = []
         return {
             'game': game,
             'selective': True,
-            'sets': carddb.list_scryfall_sets() if not OFFLINE else [],
+            'sets': sets,
             'rarities': list(MTG_RARITIES),
             'art_flags': list(MTG_ART_FLAGS),
             'image_kinds': ['png', 'large', 'art_crop', 'border_crop'],
         }
     if game == 'pokemon':
-        meta = {} if OFFLINE else games.list_pokemon_meta()
+        fallback_types = [
+            'Colorless', 'Darkness', 'Dragon', 'Fairy', 'Fighting', 'Fire',
+            'Grass', 'Lightning', 'Metal', 'Psychic', 'Water']
+        fallback_supertypes = ['Pokémon', 'Trainer', 'Energy']
+        fallback_subtypes = [
+            'Basic', 'Stage 1', 'Stage 2', 'V', 'VMAX', 'VSTAR', 'ex', 'EX',
+            'GX', 'Item', 'Supporter', 'Stadium', 'Tool']
+        sets = []
+        meta = {
+            'types': fallback_types,
+            'subtypes': fallback_subtypes,
+            'rarities': [],
+            'supertypes': fallback_supertypes,
+        }
+        if not OFFLINE:
+            try:
+                sets = games.list_pokemon_sets()
+            except Exception:  # noqa: BLE001
+                sets = []
+            try:
+                live = games.list_pokemon_meta()
+                for key in ('types', 'subtypes', 'rarities', 'supertypes'):
+                    if live.get(key):
+                        meta[key] = live[key]
+            except Exception:  # noqa: BLE001
+                pass
         return {
             'game': game,
             'selective': True,
-            'sets': [] if OFFLINE else games.list_pokemon_sets(),
-            'types': meta.get('types') or [],
-            'subtypes': meta.get('subtypes') or [],
-            'rarities': meta.get('rarities') or [],
-            'supertypes': meta.get('supertypes') or [],
+            'sets': sets,
+            'types': meta['types'] or fallback_types,
+            'subtypes': meta['subtypes'] or fallback_subtypes,
+            'rarities': meta['rarities'] or [],
+            'supertypes': meta['supertypes'] or fallback_supertypes,
             'image_kinds': ['png', 'large'],
         }
     return {

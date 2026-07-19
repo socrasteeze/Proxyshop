@@ -140,6 +140,37 @@ class TestResolveCollection:
         assert carddb.find_card('Black Lotus') is not None
 
 
+class TestSetList:
+
+    def test_local_mtg_sets_from_cache(self, carddb):
+        carddb.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42', released='2021-04-23'))
+        carddb.store_card(make_card('id-2', 'Sol Ring', 'c21', '125', released='2021-04-23'))
+        carddb.store_card(make_card('id-3', 'Bolt', 'sta', '42a', released='2021-04-23'))
+        rows = carddb.list_local_mtg_sets()
+        by_id = {r['id']: r for r in rows}
+        assert set(by_id) == {'sta', 'c21'}
+        assert by_id['sta']['card_count'] == 2
+        assert by_id['sta']['name'] == 'STA'
+
+    def test_list_scryfall_sets_offline_uses_local(self, carddb):
+        carddb.store_card(make_card('id-1', 'Lightning Bolt', 'mh3', '1', released='2024-06-14'))
+        rows = carddb.list_scryfall_sets()
+        assert len(rows) == 1
+        assert rows[0]['id'] == 'mh3'
+
+    def test_list_scryfall_sets_serves_meta_cache(self, carddb):
+        payload = [
+            {'id': 'mh3', 'name': 'Modern Horizons 3', 'released_at': '2024-06-14',
+             'card_count': 300, 'set_type': 'expansion'},
+            {'id': 'tkn', 'name': 'Tokens', 'released_at': '2024-06-14',
+             'card_count': 10, 'set_type': 'token'},
+        ]
+        carddb.set_meta('scryfall_sets_json', json.dumps(payload))
+        carddb.set_meta('scryfall_sets_at', '2099-01-01T00:00:00Z')
+        rows = carddb.list_scryfall_sets()
+        assert [r['id'] for r in rows] == ['mh3', 'tkn']
+
+
 class TestDecks:
 
     def test_save_and_get_deck(self, carddb):

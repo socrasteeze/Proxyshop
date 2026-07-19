@@ -12,6 +12,7 @@ Scryfall API etiquette implemented here (https://scryfall.com/docs/api):
     - Prefer nightly bulk-data files over per-card API scraping.
 """
 # Standard Library Imports
+import calendar
 import json
 import sqlite3
 import threading
@@ -593,11 +594,77 @@ class CardDB:
             total_i = None
         return cards, total_i, bool(data.get('has_more'))
 
-    def list_scryfall_sets(self) -> list[dict]:
-        """Return compact Scryfall set list for cache UI pickers."""
-        if self.offline:
-            return []
-        res = self.session.get(f'{SCRYFALL_API}/sets')
+    # Expansion-ish types float to the top of the empty set-picker list.
+    _PREFERRED_SET_TYPES = frozenset({
+        'expansion', 'core', 'draft_innovation', 'commander', 'masters',
+        'funny', 'alchemy', 'masterpiece', 'arsenal',
+    })
+
+    def list_local_mtg_sets(self) -> list[dict]:
+        """Distinct MTG sets already present in the local card cache."""
+        rows = self._conn().execute(
+            """
+            SELECT set_code AS id,
+                   COALESCE(
+                       NULLIF(json_extract(json, '$.set_name'), ''),
+                       set_code
+                   ) AS name,
+                   MAX(released_at) AS released_at,
+                   COUNT(*) AS card_count
+            FROM cards
+            WHERE game='mtg' AND set_code != ''
+            GROUP BY set_code
+            """
+        ).fetchall()
+        return [{
+            'id': str(r['id']).lower(),
+            'name': r['name'] or r['id'],
+            'released_at': r['released_at'],
+            'card_count': int(r['card_count'] or 0),
+            'set_type': 'local',
+        } for r in rows]
+
+    def _sort_set_rows(self, rows: list[dict]) -> list[dict]:
+        """Newest first; playable set types before tokens/memorabilia."""
+        preferred = self._PREFERRED_SET_TYPES
+        rows = list(rows)
+        rows.sort(key=lambda r: r.get('released_at') or '', reverse=True)
+        rows.sort(key=lambda r: 0 if (r.get('set_type') or '') in preferred else 1)
+        return rows
+
+    def _load_sets_cache(self) -> tuple[list[dict], str]:
+        raw = self.get_meta('scryfall_sets_json')
+        cached_at = self.get_meta('scryfall_sets_at') or ''
+        if not raw:
+            return [], cached_at
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return [], cached_at
+        if not isinstance(parsed, list):
+            return [], cached_at
+        rows = [r for r in parsed if isinstance(r, dict) and r.get('id')]
+        return rows, cached_at
+
+    def _sets_cache_fresh(self, cached_at: str, max_age_hours: float) -> bool:
+        if not cached_at or max_age_hours <= 0:
+            return False
+        try:
+            age = time.time() - calendar.timegm(
+                time.strptime(cached_at[:19], '%Y-%m-%dT%H:%M:%S'))
+            return age < max_age_hours * 3600
+        except (TypeError, ValueError, OverflowError, OSError):
+            return False
+
+    def _save_sets_cache(self, rows: list[dict]) -> None:
+        stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        self.set_meta(
+            'scryfall_sets_json',
+            json.dumps(rows, separators=(',', ':')))
+        self.set_meta('scryfall_sets_at', stamp)
+
+    def _fetch_scryfall_sets(self) -> list[dict]:
+        res = self.session.get(f'{SCRYFALL_API}/sets', timeout=12)
         if res.status_code != 200:
             return []
         data = res.json()
@@ -613,6 +680,49 @@ class CardDB:
                 'set_type': s.get('set_type'),
             })
         return rows
+
+    def _refresh_sets_cache(self) -> None:
+        """Best-effort background refresh of the Scryfall set list."""
+        if self.offline:
+            return
+        try:
+            rows = self._fetch_scryfall_sets()
+            if rows:
+                self._save_sets_cache(rows)
+        except (requests.RequestException, ValueError, TypeError, sqlite3.Error):
+            return
+
+    def list_scryfall_sets(self, *, max_age_hours: float = 24.0) -> list[dict]:
+        """Return compact Scryfall set list for cache UI pickers.
+
+        Serves meta-table / local-DB sets immediately so the Search picklist
+        is never blocked on a slow Scryfall call. Refreshes stale cache in a
+        background thread when needed.
+        """
+        cached, cached_at = self._load_sets_cache()
+        if cached:
+            if not self._sets_cache_fresh(cached_at, max_age_hours) and not self.offline:
+                threading.Thread(
+                    target=self._refresh_sets_cache,
+                    name='scryfall-sets-refresh',
+                    daemon=True,
+                ).start()
+            return self._sort_set_rows(cached)
+
+        rows: list[dict] = []
+        if not self.offline:
+            try:
+                rows = self._fetch_scryfall_sets()
+            except (requests.RequestException, ValueError, TypeError):
+                rows = []
+        if rows:
+            try:
+                self._save_sets_cache(rows)
+            except sqlite3.Error:
+                pass
+            return self._sort_set_rows(rows)
+
+        return self._sort_set_rows(self.list_local_mtg_sets())
 
     """
     * Batch Resolution (deck imports)
