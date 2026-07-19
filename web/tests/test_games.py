@@ -177,38 +177,91 @@ class TestNormalization:
         assert total3 == 3
 
     def test_riftbound_normalization(self, monkeypatch):
-        payload = [{
-            'id': 'ogs-001-024',
-            'name': 'Annie, Fiery',
-            'set_id': 'OGS',
-            'collector_number': 1,
-            'rarity': 'epic',
-            'faction': 'fury',
-            'type': 'Unit',
-            'stats': {'energy': 5, 'might': 4, 'power': 1},
-            'image': 'https://cdn.example/annie.png',
-            'image_thumb': {'small': 'https://cdn.example/annie-sm.webp'},
-            'description': 'Bonus Damage.',
-        }]
-        monkeypatch.setattr(games, '_get', lambda url, params, extra_headers=None: (
-            payload if url.endswith('/cards') else payload[0]))
+        payload = {
+            'items': [{
+                'riftbound_id': 'ogs-001-024',
+                'name': 'Annie, Fiery',
+                'collector_number': 1,
+                'set': {'set_id': 'OGS', 'label': 'OGS'},
+                'classification': {
+                    'type': 'Unit', 'rarity': 'Epic', 'domain': ['Fury']},
+                'attributes': {'energy': 5, 'might': 4, 'power': 1},
+                'text': {'plain': 'Bonus Damage.', 'flavour': None},
+                'media': {
+                    'image_url': 'https://cdn.example/annie.png?q=80',
+                    'artist': 'Test',
+                },
+                'metadata': {},
+                'tags': [],
+            }],
+            'total': 1,
+        }
+        monkeypatch.setattr(games, '_get', lambda url, params, extra_headers=None: payload)
+        monkeypatch.setattr(games, '_rb_enrich_search_hits', lambda cards, q, limit: cards[:limit])
         (card,) = games.search_riftbound('Annie')
         assert card['id'] == 'rb-ogs-001-024'
         assert card['game'] == 'riftbound'
         assert card['set'] == 'ogs'
         assert card['set_name'] == 'OGS'
         assert card['collector_number'] == '1'
-        assert card['images']['large'].endswith('annie.png')
+        assert card['images']['large'] == 'https://cdn.example/annie.png'
         assert card['provider_data']['domain'] == 'Fury'
         assert card['provider_data']['energyCost'] == 5
         assert 'Annie' in card['name']
 
+    def test_riftbound_arc_normalize(self):
+        card = games._normalize_dotgg_arc_card({
+            'id': 'ARC-001',
+            'name': 'Vi - Destructive (Chinese Arcane Box Set Promo)',
+            'set_name': 'Arcane Box Set',
+            'type': 'Legend',
+            'color': ['Fury'],
+            'cost': '1',
+            'might': '3',
+            'image': 'https://static.dotgg.gg/riftbound/cards/ARC-001.webp',
+            'rarity': 'Promo',
+            'effect': 'Test',
+        })
+        assert card is not None
+        assert card['id'] == 'rb-arc-ARC-001'
+        assert card['set'] == 'arc'
+        assert 'Chinese Arcane' in card['name']
+        assert card['images']['large'].endswith('ARC-001.webp')
+
     def test_riftbound_no_key_required(self, monkeypatch):
-        monkeypatch.setattr(games, '_get', lambda url, params, extra_headers=None: [])
+        monkeypatch.setattr(
+            games, '_get',
+            lambda url, params, extra_headers=None: {'items': [], 'total': 0})
+        monkeypatch.setattr(games, '_rb_enrich_search_hits', lambda cards, q, limit: cards)
         assert games.search_riftbound('Annie') == []
 
-    def test_riftbound_empty_query(self):
-        assert games.search_riftbound('a') == []
+    def test_riftbound_localized_variant(self, monkeypatch):
+        en = games._normalize_riftcodex_card({
+            'riftbound_id': 'ogs-001-024',
+            'name': 'Annie - Fiery',
+            'collector_number': 1,
+            'set': {'set_id': 'OGS', 'label': 'OGS'},
+            'classification': {'type': 'Unit', 'rarity': 'Epic', 'domain': ['Fury']},
+            'attributes': {'energy': 5, 'might': 4, 'power': 1},
+            'text': {'plain': 'x', 'flavour': None},
+            'media': {'image_url': 'https://cdn.example/annie.png'},
+            'metadata': {},
+            'tags': [],
+        })
+        monkeypatch.setattr(games, '_rb_locale_index', lambda locale, force=False: {
+            'ogs-001-024': {
+                'name': 'アニー - フィアリー',
+                'image': 'https://cdn.example/annie.png',
+                'public_code': 'OGS-001/024',
+                'id': 'ogs-001-024',
+            }
+        })
+        variant = games._rb_localized_variant(en, 'ja-jp', 'ja')
+        assert variant is not None
+        assert variant['id'] == 'rb-ja-ogs-001-024'
+        assert variant['lang'] == 'ja'
+        assert 'アニー' in variant['name']
+        assert variant['images']['large'] == en['images']['large']
 
     def test_provider_200_error_payload(self, monkeypatch):
         class FakeRes:

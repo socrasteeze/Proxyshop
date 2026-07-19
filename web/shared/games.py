@@ -5,7 +5,7 @@
 * carddb; these providers cover:
 *   - pokemon      -> pokemontcg.io (free; optional API key raises limits)
 *   - union-arena  -> unionarena-tcg.com NA+JP cardlists (public; no API key)
-*   - riftbound    -> riftscribe.gg (public; no API key)
+*   - riftbound    -> riftcodex.com (+ DotGG ARC; official JA/KO names)
 * Must never import from `src/`.
 """
 # Standard Library Imports
@@ -25,7 +25,10 @@ import requests
 from web.shared.carddb import HEADERS
 
 POKEMON_API = 'https://api.pokemontcg.io/v2'
-RIFTSCRIBE_API = 'https://riftscribe.gg/api'
+# RiftScribe lacked VEN/promos; Riftcodex is the primary catalog + Riot CDN arts.
+RIFTCODEX_API = 'https://api.riftcodex.com'
+DOTGG_RIFTBOUND_CARDS = 'https://api.dotgg.gg/cgfw/getcards'
+RB_OFFICIAL_ORIGIN = 'https://playriftbound.com'
 UA_ORIGIN = 'https://www.unionarena-tcg.com'
 # Official cardlist locales: English (NA) + Japanese
 UA_LOCALES = {
@@ -602,112 +605,377 @@ def list_union_arena_page(page: int = 1, limit: int = 50) -> tuple[list[dict], O
 
 
 """
-* Riftbound (riftscribe.gg — public, no API key)
+* Riftbound (Riftcodex primary + DotGG ARC + official JA/KO names)
 """
 
+_rb_arc_cache: Optional[list[dict]] = None
+_rb_arc_lock = threading.Lock()
+_rb_locale_cache: dict[str, dict[str, dict]] = {}
+_rb_locale_lock = threading.Lock()
+_rb_build_id: Optional[str] = None
 
-def _normalize_riftbound_card(c: dict) -> Optional[dict]:
-    """Map a RiftScribe card object into Proxyshop's cached card shape."""
-    raw_id = str(c.get('id') or c.get('card_id') or '')
-    if not raw_id:
+
+def _rb_clean_image(url: str) -> str:
+    """Prefer the bare Riot CDN URL (full 744x1039) without resize query params."""
+    raw = (url or '').strip()
+    if not raw:
+        return ''
+    # Keep accountingTag-free path so ensure_image caches one file per art
+    return raw.split('?', 1)[0]
+
+
+def _normalize_riftcodex_card(item: dict, *, lang: str = 'en') -> Optional[dict]:
+    """Map a Riftcodex card object into Proxyshop's cached card shape."""
+    if not isinstance(item, dict):
         return None
-    name = c.get('name') or ''
-    if not name:
+    raw_id = str(item.get('riftbound_id') or item.get('id') or '').strip()
+    name = str(item.get('name') or '').strip()
+    if not raw_id or not name:
         return None
 
-    thumbs = c.get('image_thumb') or {}
-    if not isinstance(thumbs, dict):
-        thumbs = {}
-    art = c.get('art') if isinstance(c.get('art'), dict) else {}
-    art_thumbs = art.get('image_thumb') if isinstance(art.get('image_thumb'), dict) else {}
-    large = (
-        c.get('image')
-        or art.get('image')
-        or thumbs.get('large')
-        or art_thumbs.get('large')
-        or c.get('thumbnail_url')
-        or '')
-    small = (
-        thumbs.get('small')
-        or art_thumbs.get('small')
-        or c.get('thumbnail_url')
-        or large)
+    media = item.get('media') if isinstance(item.get('media'), dict) else {}
+    attrs = item.get('attributes') if isinstance(item.get('attributes'), dict) else {}
+    classification = (
+        item.get('classification')
+        if isinstance(item.get('classification'), dict) else {})
+    text = item.get('text') if isinstance(item.get('text'), dict) else {}
+    set_info = item.get('set') if isinstance(item.get('set'), dict) else {}
+    metadata = item.get('metadata') if isinstance(item.get('metadata'), dict) else {}
 
-    stats = c.get('stats') if isinstance(c.get('stats'), dict) else {}
-    faction = str(c.get('faction') or '')
-    domain = faction[:1].upper() + faction[1:] if faction else ''
-    card_type = str(c.get('type') or c.get('cardType') or '')
-    num = c.get('collector_number')
+    large = _rb_clean_image(str(media.get('image_url') or ''))
+    set_id = str(set_info.get('set_id') or '').upper()
+    set_label = str(set_info.get('label') or set_id)
+    num = item.get('collector_number')
     if num is None or num == '':
-        # ids look like ogs-001-024 → collector 001
         parts = raw_id.split('-')
         num = parts[1] if len(parts) >= 2 else raw_id
-    set_id = str(c.get('set_id') or '').upper()
 
-    provider = dict(c)
-    # Aliases expected by the compose renderer / editor
+    domains = classification.get('domain') or []
+    if isinstance(domains, list) and domains:
+        domain = str(domains[0])
+    else:
+        domain = str(domains or '')
+    if domain and domain == domain.lower():
+        domain = domain[:1].upper() + domain[1:]
+    card_type = str(classification.get('type') or '')
+    rarity = str(classification.get('rarity') or '')
+
+    provider = dict(item)
     provider.setdefault('domain', domain)
     provider.setdefault('cardType', card_type)
-    provider.setdefault('energyCost', stats.get('energy'))
-    provider.setdefault('powerCost', stats.get('power'))
-    provider.setdefault('might', stats.get('might'))
-    provider.setdefault('description', c.get('description') or '')
-    provider.setdefault('flavorText', c.get('flavor_text') or '')
-    provider.setdefault('rarity', c.get('rarity') or '')
+    provider.setdefault('energyCost', attrs.get('energy'))
+    provider.setdefault('powerCost', attrs.get('power'))
+    provider.setdefault('might', attrs.get('might'))
+    provider.setdefault('description', text.get('plain') or '')
+    provider.setdefault('flavorText', text.get('flavour') or '')
+    provider.setdefault('rarity', rarity)
     provider.setdefault('code', str(num))
     provider.setdefault('number', str(num))
-    provider.setdefault('set', {'id': set_id.lower(), 'name': set_id})
-    if art.get('artist'):
-        provider.setdefault('artist', art.get('artist'))
+    provider.setdefault('set', {'id': set_id.lower(), 'name': set_label})
+    if media.get('artist'):
+        provider.setdefault('artist', media.get('artist'))
+    provider['riftbound_id'] = raw_id
+    provider['source'] = 'riftcodex'
+    if metadata:
+        provider['metadata'] = metadata
+
+    card_id = f"rb-{_safe_id(raw_id)}"
+    if lang != 'en':
+        card_id = f"rb-{lang}-{_safe_id(raw_id)}"
 
     return {
         'object': 'card',
         'game': 'riftbound',
-        'id': f"rb-{_safe_id(raw_id)}",
+        'id': card_id,
         'name': name,
         'set': set_id.lower(),
-        'set_name': set_id,
+        'set_name': set_label or set_id,
         'collector_number': str(num),
-        'lang': 'en',
+        'lang': lang,
         'released_at': None,
         'images': {
-            'small': small,
+            'small': large,
             'large': large,
         },
         'provider_data': provider,
     }
 
 
-def _hydrate_riftbound(card: dict) -> dict:
-    """Fetch full RiftScribe detail for a thin list row (best-effort)."""
-    detail_id = (card.get('provider_data') or {}).get('id') or (
-        card.get('provider_data') or {}).get('card_id')
-    if not detail_id:
-        return card
-    try:
-        detail = _get(f'{RIFTSCRIBE_API}/cards/{detail_id}', params={})
-    except ProviderError:
-        return card
-    if not isinstance(detail, dict):
-        return card
-    merged = _normalize_riftbound_card({**(card.get('provider_data') or {}), **detail})
-    return merged or card
+def _normalize_dotgg_arc_card(c: dict) -> Optional[dict]:
+    """Map a DotGG ARC (Chinese Arcane Box) row into Proxyshop shape."""
+    raw_id = str(c.get('id') or '').strip()
+    name = str(c.get('name') or '').strip()
+    if not raw_id or not name:
+        return None
+    if not raw_id.upper().startswith('ARC'):
+        return None
+    image = _rb_clean_image(str(c.get('image') or ''))
+    set_name = str(c.get('set_name') or 'Arcane Box Set')
+    colors = c.get('color') or []
+    domain = ''
+    if isinstance(colors, list) and colors:
+        domain = str(colors[0])
+    elif isinstance(colors, str):
+        domain = colors
+    if domain and domain == domain.lower():
+        domain = domain[:1].upper() + domain[1:]
+    card_type = str(c.get('type') or '')
+    num = raw_id.split('-', 1)[1] if '-' in raw_id else raw_id
+
+    provider = dict(c)
+    provider.setdefault('domain', domain)
+    provider.setdefault('cardType', card_type)
+    provider.setdefault('energyCost', c.get('cost'))
+    provider.setdefault('might', c.get('might'))
+    provider.setdefault('description', c.get('effect') or '')
+    provider.setdefault('flavorText', c.get('flavor') or '')
+    provider.setdefault('rarity', c.get('rarity') or '')
+    provider.setdefault('code', str(num))
+    provider.setdefault('number', str(num))
+    provider.setdefault('set', {'id': 'arc', 'name': set_name})
+    provider['riftbound_id'] = raw_id.lower()
+    provider['source'] = 'dotgg-arc'
+
+    return {
+        'object': 'card',
+        'game': 'riftbound',
+        'id': f"rb-arc-{_safe_id(raw_id)}",
+        'name': name,
+        'set': 'arc',
+        'set_name': set_name,
+        'collector_number': str(num),
+        'lang': 'en',
+        'released_at': None,
+        'images': {
+            'small': image,
+            'large': image,
+        },
+        'provider_data': provider,
+    }
+
+
+def _riftcodex_items(payload: Any) -> list[dict]:
+    if isinstance(payload, dict):
+        rows = payload.get('items')
+        if isinstance(rows, list):
+            return [c for c in rows if isinstance(c, dict)]
+    return _card_rows(payload)
+
+
+def _list_arc_cards(*, force: bool = False) -> list[dict]:
+    """Chinese Arcane Box promos from DotGG (absent from Riftcodex)."""
+    global _rb_arc_cache
+    with _rb_arc_lock:
+        if _rb_arc_cache is not None and not force:
+            return list(_rb_arc_cache)
+    payload = _get(DOTGG_RIFTBOUND_CARDS, params={'game': 'riftbound'})
+    rows = payload if isinstance(payload, list) else _card_rows(payload)
+    cards: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        card = _normalize_dotgg_arc_card(row)
+        if not card or card['id'] in seen:
+            continue
+        seen.add(card['id'])
+        cards.append(card)
+    with _rb_arc_lock:
+        _rb_arc_cache = cards
+        return list(cards)
+
+
+def _rb_official_build_id(*, force: bool = False) -> str:
+    """Resolve the Next.js buildId for playriftbound.com card gallery."""
+    global _rb_build_id
+    if _rb_build_id and not force:
+        return _rb_build_id
+    res = _request(f'{RB_OFFICIAL_ORIGIN}/en-us/card-gallery/')
+    match = re.search(r'"buildId"\s*:\s*"([^"]+)"', res.text or '')
+    if not match:
+        raise ProviderError('Could not resolve playriftbound.com buildId')
+    _rb_build_id = match.group(1)
+    return _rb_build_id
+
+
+def _rb_walk_official_cards(obj: Any):
+    """Yield card-like dicts from official gallery Next.js JSON."""
+    if isinstance(obj, dict):
+        if 'cardImage' in obj and 'name' in obj and (
+                'publicCode' in obj or 'id' in obj):
+            yield obj
+        for value in obj.values():
+            yield from _rb_walk_official_cards(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _rb_walk_official_cards(value)
+
+
+def _rb_locale_index(locale: str, *, force: bool = False) -> dict[str, dict]:
+    """Map riftbound id / publicCode → {name, image, public_code} for a locale."""
+    locale = (locale or '').lower()
+    with _rb_locale_lock:
+        if locale in _rb_locale_cache and not force:
+            return dict(_rb_locale_cache[locale])
+    build = _rb_official_build_id(force=force)
+    payload = _get(
+        f'{RB_OFFICIAL_ORIGIN}/_next/data/{build}/{locale}/card-gallery.json',
+        params={})
+    index: dict[str, dict] = {}
+    for card in _rb_walk_official_cards(payload):
+        name = str(card.get('name') or '').strip()
+        if not name:
+            continue
+        public_code = str(card.get('publicCode') or '').strip()
+        raw_id = str(card.get('id') or '').strip().lower()
+        image = ''
+        img = card.get('cardImage')
+        if isinstance(img, dict):
+            image = _rb_clean_image(str(img.get('url') or ''))
+        entry = {
+            'name': name,
+            'image': image,
+            'public_code': public_code,
+            'id': raw_id,
+        }
+        if raw_id:
+            index[raw_id] = entry
+        if public_code:
+            # OGN-001/298 → also index ogn-001-298 style keys when possible
+            index[public_code] = entry
+            compact = public_code.replace('/', '-').lower()
+            index[compact] = entry
+    with _rb_locale_lock:
+        _rb_locale_cache[locale] = index
+        return dict(index)
+
+
+def _rb_localized_variant(en_card: dict, locale: str, lang: str) -> Optional[dict]:
+    """Build a lang-specific row from an EN card + official locale name map."""
+    provider = en_card.get('provider_data') or {}
+    raw_id = str(provider.get('riftbound_id') or '').lower()
+    if not raw_id:
+        return None
+    index = _rb_locale_index(locale)
+    entry = index.get(raw_id)
+    if not entry:
+        # try collector-style public code
+        set_id = str(en_card.get('set') or '').upper()
+        num = str(en_card.get('collector_number') or '')
+        if set_id and num:
+            entry = index.get(f'{set_id}-{num}') or index.get(
+                f'{set_id}-{num.zfill(3)}')
+    if not entry:
+        return None
+    loc_name = entry.get('name') or ''
+    if not loc_name or loc_name == en_card.get('name'):
+        return None
+    clone = dict(en_card)
+    clone['id'] = f"rb-{lang}-{_safe_id(raw_id)}"
+    clone['name'] = loc_name
+    clone['lang'] = lang
+    image = entry.get('image') or (en_card.get('images') or {}).get('large') or ''
+    clone['images'] = {'small': image, 'large': image}
+    prov = dict(provider)
+    prov['name'] = loc_name
+    prov['locale'] = locale
+    prov['source_name_en'] = en_card.get('name')
+    clone['provider_data'] = prov
+    return clone
+
+
+def _rb_enrich_search_hits(cards: list[dict], query: str, limit: int) -> list[dict]:
+    """Append JA/KO name matches and ARC hits for a live search query."""
+    q = (query or '').strip().lower()
+    if not q:
+        return cards[:limit]
+    seen = {c['id'] for c in cards}
+    out = list(cards)
+
+    # Localized official names (substring)
+    for locale, lang in (('ja-jp', 'ja'), ('ko-kr', 'ko')):
+        if len(out) >= limit:
+            break
+        try:
+            index = _rb_locale_index(locale)
+        except ProviderError:
+            continue
+        for entry in index.values():
+            name = str(entry.get('name') or '')
+            if q not in name.lower():
+                continue
+            raw_id = str(entry.get('id') or '').lower()
+            if not raw_id:
+                continue
+            card_id = f'rb-{lang}-{_safe_id(raw_id)}'
+            if card_id in seen:
+                continue
+            # Prefer pairing with an EN Riftcodex row when possible
+            en_id = f'rb-{_safe_id(raw_id)}'
+            en_card = next((c for c in cards if c.get('id') == en_id), None)
+            if en_card:
+                variant = _rb_localized_variant(en_card, locale, lang)
+            else:
+                variant = {
+                    'object': 'card',
+                    'game': 'riftbound',
+                    'id': card_id,
+                    'name': name,
+                    'set': raw_id.split('-')[0] if '-' in raw_id else '',
+                    'set_name': (raw_id.split('-')[0] if '-' in raw_id else '').upper(),
+                    'collector_number': (
+                        raw_id.split('-')[1] if '-' in raw_id else raw_id),
+                    'lang': lang,
+                    'released_at': None,
+                    'images': {
+                        'small': entry.get('image') or '',
+                        'large': entry.get('image') or '',
+                    },
+                    'provider_data': {
+                        'riftbound_id': raw_id,
+                        'name': name,
+                        'locale': locale,
+                        'source': 'official-gallery',
+                    },
+                }
+            if not variant or variant['id'] in seen:
+                continue
+            seen.add(variant['id'])
+            out.append(variant)
+            if len(out) >= limit:
+                break
+
+    if len(out) < limit:
+        try:
+            for card in _list_arc_cards():
+                if q in card['name'].lower() and card['id'] not in seen:
+                    seen.add(card['id'])
+                    out.append(card)
+                    if len(out) >= limit:
+                        break
+        except ProviderError:
+            pass
+    return out[:limit]
 
 
 def search_riftbound(name: str, limit: int = 20) -> list[dict]:
-    """Search Riftbound cards via RiftScribe (no API key required)."""
+    """Search Riftbound cards via Riftcodex (plus ARC / JA-KO name matches)."""
     q = (name or '').strip()
     if len(q) < 2:
         return []
+    limit = min(max(limit, 1), 50)
     data = _get(
-        f'{RIFTSCRIBE_API}/cards',
-        params={'q': q, 'limit': min(max(limit, 1), 50)})
+        f'{RIFTCODEX_API}/cards/name',
+        params={'fuzzy': q, 'size': limit, 'page': 1})
     cards: list[dict] = []
-    for c in _card_rows(data):
-        normalized = _normalize_riftbound_card(c)
-        if normalized:
-            cards.append(normalized)
-    return [_hydrate_riftbound(card) for card in cards[:limit]]
+    seen: set[str] = set()
+    for item in _riftcodex_items(data):
+        normalized = _normalize_riftcodex_card(item)
+        if not normalized or normalized['id'] in seen:
+            continue
+        seen.add(normalized['id'])
+        cards.append(normalized)
+        if len(cards) >= limit:
+            break
+    return _rb_enrich_search_hits(cards, q, limit)
 
 
 def list_riftbound_page(
@@ -716,31 +984,71 @@ def list_riftbound_page(
     *,
     hydrate: bool = False,
 ) -> tuple[list[dict], Optional[int]]:
-    """Fetch one RiftScribe catalog page.
+    """Fetch one Riftbound catalog page (Riftcodex, then ARC extras).
 
-    Returns (cards, total_hint) where total_hint comes from X-Total-Count when present.
+    ``hydrate`` is accepted for API compatibility; Riftcodex list rows are full.
+    Returns (cards, total_hint) where total includes ARC promos after the
+    Riftcodex catalog.
+    """
+    del hydrate  # Riftcodex payloads already include art + text
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+
+    meta = _get(f'{RIFTCODEX_API}/cards', params={'page': 1, 'size': 1})
+    rc_total = 0
+    if isinstance(meta, dict) and meta.get('total') is not None:
+        try:
+            rc_total = int(meta['total'])
+        except (TypeError, ValueError):
+            rc_total = 0
+
+    arc_cards: list[dict] = []
+    try:
+        arc_cards = _list_arc_cards()
+    except ProviderError:
+        arc_cards = []
+    total = rc_total + len(arc_cards)
+
+    if offset < rc_total:
+        page = (offset // limit) + 1
+        data = _get(
+            f'{RIFTCODEX_API}/cards',
+            params={'page': page, 'size': limit})
+        cards: list[dict] = []
+        for item in _riftcodex_items(data):
+            normalized = _normalize_riftcodex_card(item)
+            if normalized:
+                cards.append(normalized)
+        return cards, total
+
+    arc_offset = offset - rc_total
+    if arc_offset >= len(arc_cards):
+        return [], total
+    return arc_cards[arc_offset:arc_offset + limit], total
+
+
+def list_riftbound_locale_page(
+    offset: int = 0,
+    limit: int = 50,
+    *,
+    locale: str = 'ja-jp',
+    lang: str = 'ja',
+) -> tuple[list[dict], Optional[int]]:
+    """Optional helper: emit localized name rows for cache enrichment.
+
+    Pairs official locale names with Riftcodex EN rows when possible.
     """
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
-    res = _request(
-        f'{RIFTSCRIBE_API}/cards',
-        params={'limit': limit, 'offset': offset})
-    try:
-        payload = res.json()
-    except ValueError as e:
-        raise ProviderError('Provider returned non-JSON response') from e
+    # Use EN catalog page, then localize names
+    en_cards, total = list_riftbound_page(offset=offset, limit=limit)
     cards: list[dict] = []
-    for c in _card_rows(payload):
-        normalized = _normalize_riftbound_card(c)
-        if normalized:
-            cards.append(_hydrate_riftbound(normalized) if hydrate else normalized)
-    total: Optional[int] = None
-    raw_total = res.headers.get('X-Total-Count') or res.headers.get('x-total-count')
-    if raw_total:
-        try:
-            total = int(raw_total)
-        except ValueError:
-            total = None
+    for en_card in en_cards:
+        if en_card.get('id', '').startswith('rb-arc-'):
+            continue
+        variant = _rb_localized_variant(en_card, locale, lang)
+        if variant:
+            cards.append(variant)
     return cards, total
 
 

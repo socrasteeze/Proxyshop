@@ -26,17 +26,25 @@ def _fast_cache_pacing(monkeypatch):
 
 
 def _rb_row(i: int) -> dict:
+    """Riftcodex-shaped list row for cache tests."""
     return {
-        'id': f'ogs-{i:03d}-001',
+        'riftbound_id': f'ogs-{i:03d}-001',
         'name': f'Card {i}',
-        'set_id': 'OGS',
         'collector_number': i,
-        'image': f'https://cdn.example/card-{i}.png',
-        'image_thumb': {'small': f'https://cdn.example/card-{i}-sm.webp'},
-        'faction': 'fury',
-        'type': 'Unit',
-        'stats': {'energy': 1, 'might': 1, 'power': 0},
-        'description': f'Rules {i}',
+        'set': {'set_id': 'OGS', 'label': 'OGS'},
+        'classification': {
+            'type': 'Unit',
+            'rarity': 'common',
+            'domain': ['Fury'],
+        },
+        'attributes': {'energy': 1, 'might': 1, 'power': 0},
+        'text': {'plain': f'Rules {i}', 'flavour': None},
+        'media': {
+            'image_url': f'https://cdn.example/card-{i}.png',
+            'artist': 'Test',
+        },
+        'metadata': {},
+        'tags': [],
     }
 
 
@@ -45,27 +53,29 @@ class TestListRiftboundPage:
     def test_paginates_and_reads_total(self, monkeypatch):
         calls = []
 
-        class FakeRes:
-            def __init__(self, offset, limit):
-                self.status_code = 200
-                self.headers = {'X-Total-Count': '3'}
-                self._rows = [_rb_row(i) for i in range(offset, min(offset + limit, 3))]
+        def fake_get(url, params=None, extra_headers=None):
+            params = params or {}
+            calls.append(dict(params))
+            page = int(params.get('page') or 1)
+            size = int(params.get('size') or 50)
+            if 'getcards' in url:
+                return []
+            if size == 1:
+                return {'items': [], 'total': 3, 'page': 1, 'size': 1}
+            start = (page - 1) * size
+            rows = [_rb_row(i) for i in range(start, min(start + size, 3))]
+            return {'items': rows, 'total': 3, 'page': page, 'size': size}
 
-            def json(self):
-                return self._rows
-
-        def fake_get(url, params=None, headers=None, timeout=30, allow_redirects=True):
-            calls.append(params)
-            return FakeRes(params['offset'], params['limit'])
-
-        monkeypatch.setattr(games.requests, 'get', fake_get)
+        monkeypatch.setattr(games, '_get', fake_get)
+        monkeypatch.setattr(games, '_list_arc_cards', lambda force=False: [])
         page1, total = games.list_riftbound_page(offset=0, limit=2, hydrate=False)
         assert total == 3
         assert [c['name'] for c in page1] == ['Card 0', 'Card 1']
         page2, _ = games.list_riftbound_page(offset=2, limit=2, hydrate=False)
         assert [c['name'] for c in page2] == ['Card 2']
-        assert calls[0]['offset'] == 0
-        assert calls[1]['offset'] == 2
+        # page/size style (plus meta size=1 probes)
+        assert any(c.get('page') == 1 and int(c.get('size') or 0) == 2 for c in calls)
+        assert any(c.get('page') == 2 and int(c.get('size') or 0) == 2 for c in calls)
 
 
 class TestCacheGameResume:
@@ -80,12 +90,13 @@ class TestCacheGameResume:
             rows = pages.get(offset, [])
             cards = []
             for c in rows:
-                n = games._normalize_riftbound_card(c)
+                n = games._normalize_riftcodex_card(c)
                 if n:
                     cards.append(n)
             return cards, 3
 
         monkeypatch.setattr(games, 'list_riftbound_page', fake_list)
+        monkeypatch.setattr(games, '_rb_localized_variant', lambda *a, **k: None)
         monkeypatch.setattr(
             game_cache.images, 'ensure_image', lambda *a, **k: None)
 

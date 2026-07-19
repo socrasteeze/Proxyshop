@@ -81,7 +81,10 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   ([official NA + JP cardlists](https://www.unionarena-tcg.com/na/cardlist/) —
   no key; English and Japanese printings; card images are Bandai 600×837 PNGs),
   and
-  **Riftbound** ([RiftScribe](https://riftscribe.gg/api-docs) — public, no key).
+  **Riftbound** ([Riftcodex](https://riftcodex.com/) — public REST API, no key;
+  official Riot 744×1039 arts; DotGG supplies Chinese Arcane Box promos; official
+  JA/KO gallery names enrich search). Note: JP/CN *language card faces* are not
+  separately published — EN/JA share the same art URLs.
   Everything found online is cached locally, so the
   browser works offline for anything you've seen before. Photoshop rendering
   supports **MTG** (and **Pokémon** when PSDs are installed on the Windows
@@ -126,8 +129,9 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
 
   Re-run the start command to resume from the checkpoint under
   `/data/cache-runs/`. Use `--fresh` to start over, `--images-only` to fill
-  missing images for cards already in the DB. Riftbound uses public RiftScribe
-  (no key). Full MTG dumps still use `manage bulk-download`.
+  missing images for cards already in the DB. Riftbound uses public Riftcodex
+  (no key) plus DotGG Arcane Box promos. Full MTG dumps still use
+  `manage bulk-download`.
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
   Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when
@@ -233,7 +237,7 @@ file alone does not update a running container.
 
 ```sh
 # Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):
-# Union Arena (official cardlist) and Riftbound (RiftScribe) need no key.
+# Union Arena (official cardlist) and Riftbound (Riftcodex) need no key.
 echo 'YOUR_POKEMONTCG_KEY' > ~/.proxyshop-pokemontcg-key
 chmod 600 ~/.proxyshop-pokemontcg-key
 # Required: restart the container with the key

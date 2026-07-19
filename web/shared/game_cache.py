@@ -249,6 +249,36 @@ def _store_and_image(
 ) -> None:
     db.store_card(card, source='catalog', game=progress.game)
     progress.stored += 1
+    # Riftbound: also store official JA/KO name rows (same art URL, searchable)
+    if (
+        progress.game == 'riftbound'
+        and card.get('lang') == 'en'
+        and not str(card.get('id') or '').startswith('rb-arc-')
+    ):
+        for locale, lang in (('ja-jp', 'ja'), ('ko-kr', 'ko')):
+            try:
+                variant = games._rb_localized_variant(card, locale, lang)
+            except games.ProviderError:
+                variant = None
+            if not variant:
+                continue
+            db.store_card(variant, source='catalog', game=progress.game)
+            progress.stored += 1
+            if progress.download_images:
+                existing_v = sorted(
+                    images_dir.glob(f"{variant['id']}-{progress.image_kind}.*"))
+                existing_v = [p for p in existing_v if not p.name.endswith('.part')]
+                if existing_v:
+                    progress.images_skip += 1
+                else:
+                    _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
+                    path_v = images.ensure_image(
+                        db.session, variant, progress.image_kind, images_dir,
+                        offline=False)
+                    if path_v:
+                        progress.images_ok += 1
+                    else:
+                        progress.images_fail += 1
     if not progress.download_images:
         _polite_sleep(CACHE_CARD_INTERVAL, watch)
         return

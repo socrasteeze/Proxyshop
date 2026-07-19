@@ -521,15 +521,25 @@ class CardDB:
         """Substring name search against the local DB only (no network).
 
         Returns one row per printing, name-ordered then newest first.
+        MTG stays English-only; other games include all stored langs (e.g. JA).
         """
         con = self._conn()
-        rows = con.execute(
-            """
-            SELECT json FROM cards
-            WHERE name LIKE ? COLLATE NOCASE AND lang='en' AND game=?
-            ORDER BY name COLLATE NOCASE ASC, released_at DESC
-            LIMIT ?
-            """, (f'%{text}%', game, int(limit))).fetchall()
+        if game == 'mtg':
+            rows = con.execute(
+                """
+                SELECT json FROM cards
+                WHERE name LIKE ? COLLATE NOCASE AND lang='en' AND game=?
+                ORDER BY name COLLATE NOCASE ASC, released_at DESC
+                LIMIT ?
+                """, (f'%{text}%', game, int(limit))).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT json FROM cards
+                WHERE name LIKE ? COLLATE NOCASE AND game=?
+                ORDER BY name COLLATE NOCASE ASC, released_at DESC
+                LIMIT ?
+                """, (f'%{text}%', game, int(limit))).fetchall()
         return [json.loads(r['json']) for r in rows]
 
     def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:
