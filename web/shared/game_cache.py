@@ -243,6 +243,7 @@ def _store_and_image(
     card: dict,
     progress: CacheProgress,
     watch: Optional['_StopWatch'] = None,
+    print_fn=print,
 ) -> None:
     db.store_card(card, source='catalog', game=progress.game)
     progress.stored += 1
@@ -262,6 +263,8 @@ def _store_and_image(
         progress.images_ok += 1
     else:
         progress.images_fail += 1
+        name = card.get('name') or card.get('id') or '?'
+        print_fn(f"!! image failed: {name} ({card.get('id')})")
     _polite_sleep(CACHE_CARD_INTERVAL, watch)
 
 
@@ -444,7 +447,7 @@ def _run_catalog(
         empty_pages = 0
         for card in cards:
             watch.check()
-            _store_and_image(db, images_dir, card, progress, watch)
+            _store_and_image(db, images_dir, card, progress, watch, print_fn)
         if progress.game == 'riftbound':
             progress.offset += len(cards)
         else:
@@ -491,6 +494,8 @@ def _run_images_only(
                 progress.images_ok += 1
             else:
                 progress.images_fail += 1
+                name = card.get('name') or card.get('id') or '?'
+                print_fn(f"!! image failed: {name} ({card.get('id')})")
             _polite_sleep(CACHE_CARD_INTERVAL, watch)
         if processed % 25 == 0:
             save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)

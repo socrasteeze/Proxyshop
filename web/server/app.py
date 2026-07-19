@@ -394,6 +394,19 @@ def page_search(request: Request, q: str = '', game: str = 'mtg'):
         'offline': OFFLINE, 'stats': carddb.stats()})
 
 
+@app.get('/logs', response_class=HTMLResponse)
+def page_logs(request: Request, game: str = 'mtg'):
+    """Live cache-run log viewer."""
+    game = (game or 'mtg').strip().lower()
+    if game not in games.CATALOG_GAMES:
+        game = games.CATALOG_GAMES[0]
+    return templates.TemplateResponse(request, 'logs.html', {
+        'game': game,
+        'games': games.GAME_LABELS,
+        'catalog_games': list(games.CATALOG_GAMES),
+    })
+
+
 """
 * Public API: Jobs
 """
@@ -1157,6 +1170,25 @@ def api_cache_game_status(request: Request, game: str):
     rate_limit(request, 'api')
     game = _require_catalog_game(game)
     return cache_runner.status(game, db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.get('/api/cache-jobs')
+def api_cache_jobs(request: Request):
+    """Status for all catalog-game cache jobs."""
+    rate_limit(request, 'api')
+    return cache_runner.all_status(db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.get('/api/cache-game/{game}/log')
+def api_cache_game_log(request: Request, game: str, limit: int = 200):
+    """Recent log lines for a cache run."""
+    rate_limit(request, 'api')
+    game = _require_catalog_game(game)
+    limit = max(1, min(int(limit or 200), 1000))
+    return {
+        'game': game,
+        'lines': cache_runner.log_lines(game, CACHE_RUNS_DIR, limit=limit),
+    }
 
 
 @app.get('/api/cache-game/{game}/options')

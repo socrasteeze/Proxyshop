@@ -583,4 +583,33 @@ class TestCacheGameApi:
         res = client.get('/search', params={'game': 'riftbound'})
         assert res.status_code == 200
         assert 'id="cache-panel"' in res.text
-        assert 'Cache' in res.text
+        assert 'Download' in res.text
+        assert 'id="cache-log"' in res.text
+        assert 'cache-jobs' in res.text
+
+    def test_cache_jobs_endpoint(self, client):
+        body = client.get('/api/cache-jobs').json()
+        assert 'jobs' in body
+        assert 'any_running' in body
+        assert body['any_running'] is False
+        for game in ('mtg', 'pokemon', 'riftbound', 'union-arena'):
+            assert game in body['jobs']
+            assert body['jobs'][game]['game'] == game
+
+    def test_cache_log_endpoint(self, client, tmp_path, appmod):
+        appmod.CACHE_RUNS_DIR = tmp_path
+        appmod.cache_runner._logs.clear()
+        empty = client.get('/api/cache-game/riftbound/log').json()
+        assert empty['game'] == 'riftbound'
+        assert empty['lines'] == []
+        appmod.cache_runner.log('riftbound', tmp_path, 'hello from test')
+        body = client.get('/api/cache-game/riftbound/log').json()
+        assert len(body['lines']) == 1
+        assert 'hello from test' in body['lines'][0]
+
+    def test_logs_page(self, client):
+        res = client.get('/logs', params={'game': 'riftbound'})
+        assert res.status_code == 200
+        assert 'id="logs-page"' in res.text
+        assert 'id="logs-log"' in res.text
+        assert 'Logs' in res.text

@@ -421,10 +421,82 @@ function wireJobDeleteButtons(root = document) {
   });
 }
 
+const GAME_LABELS_FALLBACK = {
+  mtg: 'Magic: The Gathering',
+  pokemon: 'Pokémon',
+  'union-arena': 'Union Arena',
+  riftbound: 'Riftbound',
+};
+
+function renderJobChips(container, jobs, onSelect, activeGame) {
+  if (!container) return;
+  const entries = Object.entries(jobs || {}).filter(([, st]) => {
+    if (!st) return false;
+    if (st.running) return true;
+    const s = st.status;
+    return s && s !== 'idle';
+  });
+  if (!entries.length) {
+    container.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = '';
+  entries.forEach(([game, st]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'job-chip';
+    if (st.running) btn.classList.add('is-running');
+    if (activeGame && game === activeGame) btn.classList.add('is-active');
+    const label = (st.query_label && String(st.query_label).slice(0, 40))
+      || GAME_LABELS_FALLBACK[game]
+      || game;
+    const state = st.running ? 'running' : (st.status || '');
+    btn.textContent = `${label} · ${state}`;
+    btn.title = st.query_label || game;
+    btn.addEventListener('click', () => {
+      if (typeof onSelect === 'function') onSelect(game, st);
+    });
+    container.appendChild(btn);
+  });
+}
+
+function wireCacheBadge() {
+  const badge = document.getElementById('nav-cache-badge');
+  if (!badge) return;
+  let timer = null;
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/cache-jobs');
+      if (!res.ok) return;
+      const body = await res.json();
+      const running = Object.values(body.jobs || {}).filter((j) => j && j.running);
+      if (running.length) {
+        badge.hidden = false;
+        badge.textContent = String(running.length);
+      } else {
+        badge.hidden = true;
+        badge.textContent = '';
+      }
+      if (body.any_running) {
+        if (!timer) timer = setInterval(refresh, 10000);
+      } else if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    } catch (e) { /* badge is best-effort */ }
+  }
+
+  refresh();
+}
+
 /* Give every submit form a fresh idempotency key per page load. */
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('input[name="idempotency_key"]').forEach(inp => {
     if (!inp.value) inp.value = crypto.randomUUID();
   });
   wireJobDeleteButtons();
+  wireCacheBadge();
 });

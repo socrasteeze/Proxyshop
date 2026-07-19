@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Cache Logs — Proxyshop Web{% endblock %}
+{% block content %}
+
+<div class="panel logs-page" id="logs-page"
+     data-catalog-games="{{ catalog_games|join(',') }}"
+     data-game="{{ game }}">
+  <div class="panel-header">
+    <h2>Cache logs</h2>
+    <p class="muted" style="margin:0">Live output from offline cache runs.</p>
+  </div>
+
+  <div id="logs-jobs" class="jobs-strip" hidden></div>
+
+  <div class="game-pills" id="logs-games">
+    {% for g in catalog_games %}
+    <button type="button" class="job-chip{% if g == game %} is-active{% endif %}"
+            data-game="{{ g }}">{{ games[g] }}</button>
+    {% endfor %}
+  </div>
+
+  <p class="muted" id="logs-status">—</p>
+  <pre id="logs-log" class="cache-log"></pre>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const page = document.getElementById('logs-page');
+  if (!page) return;
+  const catalog = (page.dataset.catalogGames || '').split(',').filter(Boolean);
+  const jobsEl = document.getElementById('logs-jobs');
+  const statusEl = document.getElementById('logs-status');
+  const logEl = document.getElementById('logs-log');
+  const pills = document.getElementById('logs-games');
+  let game = page.dataset.game || catalog[0] || 'mtg';
+  let pollTimer = null;
+
+  function setActivePill() {
+    if (!pills) return;
+    pills.querySelectorAll('[data-game]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.game === game);
+    });
+  }
+
+  async function refreshLog() {
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(game)}/log?limit=400`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const text = (body.lines || []).join('\n');
+      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+      logEl.textContent = text || 'No log lines yet for this game.';
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    } catch (e) {
+      logEl.textContent = 'Could not load log.';
+    }
+  }
+
+  async function refreshJobs() {
+    if (!jobsEl || typeof renderJobChips !== 'function') return null;
+    try {
+      const res = await fetch('/api/cache-jobs');
+      if (!res.ok) return null;
+      const body = await res.json();
+      renderJobChips(jobsEl, body.jobs || {}, (g) => {
+        selectGame(g);
+      }, game);
+      return body;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function refresh() {
+    setActivePill();
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(game)}`);
+      const body = res.ok ? await res.json() : { status: 'idle', running: false };
+      const parts = [
+        body.running ? 'Running' : (body.status || 'idle'),
+        `stored=${body.stored ?? 0}`,
+        `images ok/skip/fail=${body.images_ok ?? 0}/${body.images_skip ?? 0}/${body.images_fail ?? 0}`,
+      ];
+      if (body.query_label) parts.push(body.query_label);
+      if (body.error) parts.push(`error: ${body.error}`);
+      statusEl.textContent = parts.join(' · ');
+      const jobs = await refreshJobs();
+      await refreshLog();
+      const anyRunning = !!(body.running || (jobs && jobs.any_running));
+      if (anyRunning) {
+        if (!pollTimer) pollTimer = setInterval(refresh, 3000);
+      } else if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch (e) {
+      statusEl.textContent = 'Could not load status.';
+    }
+  }
+
+  function selectGame(g) {
+    if (!catalog.includes(g) || g === game) return;
+    game = g;
+    const url = new URL(location.href);
+    url.searchParams.set('game', g);
+    history.replaceState(null, '', url);
+    refresh();
+  }
+
+  if (pills) {
+    pills.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-game]');
+      if (!btn) return;
+      selectGame(btn.dataset.game);
+    });
+  }
+
+  refresh();
+});
+</script>
+{% endblock %}

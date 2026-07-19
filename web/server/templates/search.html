@@ -29,12 +29,21 @@
 <div class="panel" id="cache-panel" hidden
      data-catalog-games="{{ catalog_games|join(',') }}"
      data-offline="{{ '1' if offline else '0' }}">
-  <h2>Offline cache</h2>
+  <div class="panel-header">
+    <h2>Offline cache</h2>
+    <div class="btn-row">
+      <button type="button" id="cache-start">Download cards</button>
+      <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume</button>
+      <button type="button" class="btn-danger" id="cache-stop" hidden>Stop</button>
+    </div>
+  </div>
   <p class="muted">
     Download matching <span data-cache-label></span> cards and HQ images onto this NAS.
     MTG and Pokémon need filters (set / type / art / …) so you don’t pull everything.
     Safe to stop and resume; requests are rate-limited.
   </p>
+
+  <div id="cache-jobs" class="jobs-strip" hidden></div>
 
   <div id="cache-filters-mtg" class="cache-filters" hidden>
     <div class="field-row field-row--3">
@@ -134,13 +143,20 @@
     <p class="muted">Caches the full published catalog for this game.</p>
   </div>
 
-  <div class="btn-row" style="margin-top:1rem">
-    <button type="button" id="cache-start">Cache matching cards</button>
-    <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume</button>
-    <button type="button" class="btn-danger" id="cache-stop" hidden>Stop</button>
-    <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start over</button>
-  </div>
   <p class="muted" id="cache-status" style="margin-top:.7rem">—</p>
+
+  <details id="cache-log-wrap" class="cache-log-wrap">
+    <summary>Run log</summary>
+    <pre id="cache-log" class="cache-log"></pre>
+  </details>
+
+  <details class="advanced-block cache-advanced">
+    <summary>Advanced</summary>
+    <div class="btn-row">
+      <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start over from scratch</button>
+    </div>
+    <p class="muted" style="margin-top:.5rem">Discards the current checkpoint and restarts with the filters above.</p>
+  </details>
 </div>
 
 {% if q %}
@@ -181,6 +197,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const labels = {
     {% for g, label in games.items() %}'{{ g }}': {{ label|tojson }},{% endfor %}
   };
+  const GAME_LS_KEY = 'proxyshop.search.game';
+  const params = new URLSearchParams(location.search);
+  if (!params.has('game')) {
+    try {
+      const saved = localStorage.getItem(GAME_LS_KEY);
+      if (saved && labels[saved]) game.value = saved;
+    } catch (e) { /* private mode */ }
+  }
   try {
     wireCardTypeahead(q, {
       getGame: () => game.value,
@@ -210,6 +234,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const filtMtg = document.getElementById('cache-filters-mtg');
   const filtPkm = document.getElementById('cache-filters-pokemon');
   const filtSmall = document.getElementById('cache-filters-small');
+  const jobsEl = document.getElementById('cache-jobs');
+  const logEl = document.getElementById('cache-log');
+  const logWrap = document.getElementById('cache-log-wrap');
   let pollTimer = null;
   let optionsCache = {};
   let mtgSetPicker = null;
@@ -386,6 +413,36 @@ document.addEventListener('DOMContentLoaded', () => {
     btnFresh.disabled = offline;
   }
 
+  async function refreshLog() {
+    const g = game.value;
+    if (!catalog.includes(g) || !logEl) return;
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/log?limit=200`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const text = (body.lines || []).join('\n');
+      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+      logEl.textContent = text || '—';
+      if (atBottom || (logWrap && logWrap.open)) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    } catch (e) { /* log is best-effort */ }
+  }
+
+  async function refreshJobs() {
+    if (!jobsEl || typeof renderJobChips !== 'function') return;
+    try {
+      const res = await fetch('/api/cache-jobs');
+      if (!res.ok) return;
+      const body = await res.json();
+      renderJobChips(jobsEl, body.jobs || {}, (g) => {
+        if (game.value === g) return;
+        game.value = g;
+        game.dispatchEvent(new Event('change'));
+      }, game.value);
+    } catch (e) { /* jobs strip optional */ }
+  }
+
   async function refreshStatus() {
     const g = game.value;
     if (!catalog.includes(g)) return;
@@ -394,6 +451,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const body = res.ok ? await res.json() : { status: 'idle' };
       statusEl.textContent = formatStatus(body);
       applyButtons(body);
+      refreshLog();
+      refreshJobs();
       if (body.running) {
         if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
       } else if (pollTimer) {
@@ -426,6 +485,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     statusEl.textContent = formatStatus(body);
     applyButtons(body);
+    if (logWrap) logWrap.open = true;
+    refreshLog();
+    refreshJobs();
     if (body.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
     setTimeout(refreshStatus, 800);
   }
@@ -435,12 +497,13 @@ document.addEventListener('DOMContentLoaded', () => {
     filtPkm.hidden = g !== 'pokemon';
     filtSmall.hidden = !(g === 'riftbound' || g === 'union-arena');
     btnStart.textContent = (g === 'mtg' || g === 'pokemon')
-      ? 'Cache matching cards'
-      : 'Cache all cards';
+      ? 'Download cards'
+      : 'Download all cards';
   }
 
   async function syncPanel() {
     const g = game.value;
+    try { localStorage.setItem(GAME_LS_KEY, g); } catch (e) { /* private mode */ }
     const show = catalog.includes(g);
     panel.hidden = !show;
     if (!show) {
@@ -456,7 +519,11 @@ document.addEventListener('DOMContentLoaded', () => {
   btnStart.addEventListener('click', () => postCache('start', false));
   btnResume.addEventListener('click', () => postCache('start', false));
   btnFresh.addEventListener('click', () => {
-    if (!confirm(`Start over and re-cache ${labels[game.value] || game.value} with the current filters?`)) return;
+    const name = labels[game.value] || game.value;
+    if (!confirm(
+      `Start over from scratch for ${name}?\n\n`
+      + 'This discards the current checkpoint and restarts the download with the filters above.'
+    )) return;
     postCache('start', true);
   });
   btnStop.addEventListener('click', () => postCache('stop', false));

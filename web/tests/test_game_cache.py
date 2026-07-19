@@ -92,8 +92,8 @@ class TestCacheGameResume:
         real_store = game_cache._store_and_image
         stored = {'n': 0}
 
-        def store_then_maybe_stop(db, images_dir, card, progress, watch=None):
-            real_store(db, images_dir, card, progress, watch)
+        def store_then_maybe_stop(db, images_dir, card, progress, watch=None, print_fn=print):
+            real_store(db, images_dir, card, progress, watch, print_fn)
             stored['n'] += 1
             if stored['n'] >= 1:
                 raise game_cache.StopRequested('test stop')
