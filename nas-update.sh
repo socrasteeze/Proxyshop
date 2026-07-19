@@ -15,6 +15,24 @@
 # ============================================================================
 set -eu
 
+# Some NAS local/web terminals omit HOME; SSH login shells set it.
+# Resolve before any "$HOME/..." config lines below (set -u would abort otherwise).
+if [ -z "${HOME:-}" ]; then
+  _user="$(id -un 2>/dev/null || true)"
+  if [ -n "$_user" ] && command -v getent >/dev/null 2>&1; then
+    HOME="$(getent passwd "$_user" | cut -d: -f6)" || true
+  fi
+  if [ -z "${HOME:-}" ] && [ -n "$_user" ] && [ -d "/home/$_user" ]; then
+    HOME="/home/$_user"
+  fi
+  if [ -z "${HOME:-}" ]; then
+    echo "ERROR: HOME is unset in this shell."
+    echo "Run:  export HOME=/home/<youruser> && sh nas-update.sh"
+    exit 1
+  fi
+  export HOME
+fi
+
 # --- edit these per app ---
 REPO="socrasteeze/Proxyshop"                # GitHub owner/name (private OK)
 BRANCH="main"                               # branch to deploy from
