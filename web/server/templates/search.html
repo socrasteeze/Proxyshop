@@ -436,9 +436,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) return;
       const body = await res.json();
       renderJobChips(jobsEl, body.jobs || {}, (g) => {
-        if (game.value === g) return;
+        // Always re-sync (even when re-clicking the active game) so the panel,
+        // status and buttons refresh to the clicked game.
         game.value = g;
-        game.dispatchEvent(new Event('change'));
+        syncPanel();
       }, game.value);
     } catch (e) { /* jobs strip optional */ }
   }
@@ -448,7 +449,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!catalog.includes(g)) return;
     try {
       const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}`);
+      // Ignore a response that arrived after the user switched games — otherwise
+      // one running game's status can overwrite the panel of another (showing
+      // the wrong status/buttons, e.g. hiding Resume for a paused game).
+      if (g !== game.value) return;
       const body = res.ok ? await res.json() : { status: 'idle' };
+      if (g !== game.value) return;
       statusEl.textContent = formatStatus(body);
       applyButtons(body);
       refreshLog();
@@ -522,12 +528,12 @@ document.addEventListener('DOMContentLoaded', () => {
   async function syncPanel() {
     const g = game.value;
     try { localStorage.setItem(GAME_LS_KEY, g); } catch (e) { /* private mode */ }
+    // Stop polling the previous game; refreshStatus restarts it if the newly
+    // selected game is running.
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     const show = catalog.includes(g);
     panel.hidden = !show;
-    if (!show) {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      return;
-    }
+    if (!show) return;
     labelEl.textContent = labels[g] || g;
     syncFilters(g);
     try { await loadOptions(g); } catch (e) { /* options optional offline */ }
