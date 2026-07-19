@@ -25,7 +25,7 @@ PORT="8000:8000"                            # host:container
 CONTAINER_USER="0:0"                        # match owning uid:gid of your mounts (ls -n)
 DATA_DIR="/Volume1/proxyshop/data"          # TerraMaster: /Volume1 (capital V!)
 WORKER_TOKEN_FILE="$HOME/.proxyshop-worker-token"  # server<->worker shared secret
-APITCG_KEY_FILE="$HOME/.proxyshop-apitcg-key"          # Union Arena + Riftbound (free key: apitcg.com)
+APITCG_KEY_FILE="$HOME/.proxyshop-apitcg-key"          # Union Arena only (free key: apitcg.com)
 POKEMONTCG_KEY_FILE="$HOME/.proxyshop-pokemontcg-key"  # optional (raises pokemontcg.io limits)
 # --------------------------
 
@@ -96,11 +96,12 @@ if [ ! -f "$WORKER_TOKEN_FILE" ]; then
 fi
 mkdir -p "$DATA_DIR"
 
-# Provider API keys — optional files, empty means "no key" to the app
-APITCG_KEY="$(cat "$APITCG_KEY_FILE" 2>/dev/null || true)"
-POKEMONTCG_KEY="$(cat "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
-[ -n "$APITCG_KEY" ] && echo "==> ApiTCG key: found (Union Arena + Riftbound)" \
-                     || echo "==> ApiTCG key: none (Union Arena + Riftbound search disabled)"
+# Provider API keys — optional files, empty means "no key" to the app.
+# Strip CR/LF so `echo key > file` does not break header auth.
+APITCG_KEY="$(tr -d '\r\n' < "$APITCG_KEY_FILE" 2>/dev/null || true)"
+POKEMONTCG_KEY="$(tr -d '\r\n' < "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
+[ -n "$APITCG_KEY" ] && echo "==> ApiTCG key: found (Union Arena)" \
+                     || echo "==> ApiTCG key: none (Union Arena search disabled; Riftbound uses RiftScribe)"
 
 if [ -n "${DRY_RUN:-}" ]; then
   echo "==> DRY_RUN set — skipping docker build/run/verify. Install complete."
@@ -111,18 +112,25 @@ fi
 echo "==> Building image $APP_NAME:latest"
 docker build -t "$APP_NAME:latest" -f "$APP_DIR/web/server/Dockerfile" "$APP_DIR"
 
+# Optional secret mounts (file fallback inside the container)
+VOLUME_ARGS=""
+[ -f "$APITCG_KEY_FILE" ] && VOLUME_ARGS="$VOLUME_ARGS -v $APITCG_KEY_FILE:/run/secrets/proxyshop-apitcg-key:ro"
+[ -f "$POKEMONTCG_KEY_FILE" ] && VOLUME_ARGS="$VOLUME_ARGS -v $POKEMONTCG_KEY_FILE:/run/secrets/proxyshop-pokemontcg-key:ro"
+
 echo "==> Restarting container"
 docker stop "$APP_NAME" 2>/dev/null || true
 docker rm   "$APP_NAME" 2>/dev/null || true
+# shellcheck disable=SC2086
 docker run -d --name "$APP_NAME" --restart unless-stopped \
   -p "$PORT" \
   --user "$CONTAINER_USER" \
-  -e PROXYSHOP_WORKER_TOKEN="$(cat "$WORKER_TOKEN_FILE")" \
+  -e PROXYSHOP_WORKER_TOKEN="$(tr -d '\r\n' < "$WORKER_TOKEN_FILE")" \
   -e PROXYSHOP_OFFLINE=0 \
   -e PROXYSHOP_MAX_UPLOAD_MB=50 \
   -e PROXYSHOP_APITCG_KEY="$APITCG_KEY" \
   -e PROXYSHOP_POKEMONTCG_KEY="$POKEMONTCG_KEY" \
   -v "$DATA_DIR":/data \
+  $VOLUME_ARGS \
   "$APP_NAME:latest"
 
 # --- verify -----------------------------------------------------------------
@@ -135,8 +143,9 @@ while [ $i -lt 15 ]; do
     echo "    First deploy? Import the card database once:"
     echo "    docker exec $APP_NAME python -m web.server.manage bulk-download"
     if [ -z "$APITCG_KEY" ]; then
-      echo "    Union Arena + Riftbound search need a free apitcg.com key:"
+      echo "    Union Arena search needs a free apitcg.com key:"
       echo "    echo '<key>' > $APITCG_KEY_FILE  (then re-run this script)"
+      echo "    Riftbound search uses RiftScribe (no key)."
     fi
     exit 0
   fi

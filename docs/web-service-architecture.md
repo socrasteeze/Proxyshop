@@ -77,9 +77,10 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   through to a detail view with the full-size scan, attributes, prices, and
   HQ download buttons. Supported games: **MTG** (Scryfall),
   **Pokémon** ([pokemontcg.io](https://pokemontcg.io) — works keyless; a free
-  key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), **Union Arena** and
-  **Riftbound** ([apitcg.com](https://apitcg.com) — both require a free key in
-  `PROXYSHOP_APITCG_KEY`). Everything found online is cached locally, so the
+  key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), **Union Arena**
+  ([apitcg.com](https://apitcg.com) — free key in `PROXYSHOP_APITCG_KEY`), and
+  **Riftbound** ([RiftScribe](https://riftscribe.gg/api-docs) — public, no key).
+  Everything found online is cached locally, so the
   browser works offline for anything you've seen before. Photoshop rendering
   supports **MTG** (and **Pokémon** when PSDs are installed on the Windows
   worker). **Pokémon** and **Riftbound** also support **Compose** mode — a
@@ -185,17 +186,22 @@ The first run generates the worker token at `~/.proxyshop-worker-token`
 `~/proxyshop-web`, and starts the container.
 
 **Provider API keys** live in `$HOME` files (never in the code tree — the
-script overwrites itself on update). Create them once, then re-run the
-update script so the container restarts with them:
+script overwrites itself on update). Create them once, then **re-run the
+update script** so the container restarts with them injected. Writing the
+file alone does not update a running container.
 
 ```sh
-# Union Arena + Riftbound search (free key from https://apitcg.com):
-echo '<your apitcg key>' > ~/.proxyshop-apitcg-key
+# Union Arena search only (free key from https://apitcg.com):
+# Riftbound uses RiftScribe and needs no key.
+echo 'YOUR_APITCG_KEY' > ~/.proxyshop-apitcg-key
 chmod 600 ~/.proxyshop-apitcg-key
 # Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):
-echo '<your pokemontcg key>' > ~/.proxyshop-pokemontcg-key
+echo 'YOUR_POKEMONTCG_KEY' > ~/.proxyshop-pokemontcg-key
 chmod 600 ~/.proxyshop-pokemontcg-key
+# Required: restart the container with the key
 sh ~/proxyshop-web/nas-update.sh
+# Confirm: curl -s http://127.0.0.1:8000/api/health | grep apitcg
+# should show "apitcg": true
 ```
 
 After that, refresh from your Windows desktop with one command —

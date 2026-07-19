@@ -266,9 +266,10 @@ def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], st
         results = games.PROVIDERS[game](q, limit)
     except games.ProviderError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
+    except Exception as e:
         raise HTTPException(
-            status_code=502, detail=f'{games.GAME_LABELS[game]} provider unavailable')
+            status_code=502,
+            detail=f'{games.GAME_LABELS[game]} provider unavailable: {e}') from e
     for card in results:
         carddb.store_card(card, commit=False, game=game)
     carddb._conn().commit()
@@ -1024,4 +1025,10 @@ def health():
         'offline': OFFLINE,
         'cards': carddb.stats(),
         'workers': store.get_workers(),
+        'keys': {
+            'apitcg': bool(games._read_secret(
+                'PROXYSHOP_APITCG_KEY', games._APITCG_KEY_FILE)),
+            'pokemontcg': bool(games._read_secret(
+                'PROXYSHOP_POKEMONTCG_KEY', games._POKEMONTCG_KEY_FILE)),
+        },
     }

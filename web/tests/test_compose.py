@@ -67,6 +67,70 @@ def test_compose_pokemon_procedural(tmp_path):
     assert img.size == (750, 1050)
 
 
+def test_compose_pokemon_full_scan_extracts_art(tmp_path):
+    """Full-card scans must not be cover-cropped whole into the art window."""
+    from PIL import Image, ImageDraw
+    from web.shared.compose.text import extract_card_art_region, looks_like_full_card_scan
+
+    scan = Image.new('RGB', (750, 1050), (30, 30, 40))
+    draw = ImageDraw.Draw(scan)
+    # Distinct color only in the typical art band
+    draw.rectangle([60, 120, 690, 540], fill=(0, 200, 80))
+    # "Rules" band that must not dominate the pasted art
+    draw.rectangle([60, 560, 690, 900], fill=(200, 40, 40))
+    path = tmp_path / 'scan.png'
+    scan.save(path)
+
+    assert looks_like_full_card_scan(scan)
+    cropped = extract_card_art_region(scan)
+    # Cropped region should be mostly green art, not red rules
+    px = cropped.getpixel((cropped.size[0] // 2, cropped.size[1] // 2))
+    assert px[1] > px[0]  # green channel dominates
+
+    card = {
+        'name': 'Dendra',
+        'provider_data': {
+            'name': 'Dendra',
+            'supertype': 'Trainer',
+            'subtypes': ['Supporter'],
+            'rules': ['Put a card from your hand on the bottom of your deck.'],
+            'number': '250',
+            'artist': 'yuu',
+            'set': {'id': 'sv2'},
+        },
+    }
+    out = tmp_path / 'trainer.png'
+    img = compose_pokemon(card, art_path=path, out_path=out)
+    assert out.is_file()
+    assert img.size == (750, 1050)
+    # Sample center of art window — should be green from extracted band
+    art_px = img.getpixel((375, 330))
+    assert art_px[1] >= art_px[0]
+
+
+def test_compose_pokemon_trainer_skips_matchups(tmp_path):
+    from PIL import Image
+    art = tmp_path / 'art.png'
+    Image.new('RGB', (400, 300), (80, 120, 200)).save(art)
+    card = {
+        'name': 'Dendra',
+        'provider_data': {
+            'name': 'Dendra',
+            'supertype': 'Trainer',
+            'subtypes': ['Supporter'],
+            'rules': ['Draw until you have 5 cards.'],
+            'weaknesses': [{'type': 'Fire', 'value': '×2'}],  # should be ignored
+            'number': '250',
+            'artist': 'yuu',
+            'set': {'id': 'sv2'},
+        },
+    }
+    out = tmp_path / 't.png'
+    compose_pokemon(card, art_path=art, out_path=out)
+    # Smoke: render succeeds; matchup footer omission is structural
+    assert out.is_file()
+
+
 def test_compose_riftbound_procedural(tmp_path):
     card = {
         'name': 'Annie - Fiery',

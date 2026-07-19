@@ -115,6 +115,9 @@
           <label>Stage <input id="pkm-subtypes" value="{{ (p.subtypes or [])|join(', ') if game == 'pokemon' else '' }}" placeholder="Basic"></label>
         </div>
         <label>Supertype <input id="pkm-supertype" value="{{ p.supertype if game == 'pokemon' else 'Pokémon' }}"></label>
+        <label>Rules text <span class="muted">(Trainers)</span>
+          <textarea id="pkm-rules" class="plain" rows="3">{% if game == 'pokemon' %}{{ (p.rules or [])|join('\n\n') }}{% endif %}</textarea>
+        </label>
         <p class="group-title">Ability</p>
         {% set ab0 = (p.abilities or [{}])[0] if game == 'pokemon' else {} %}
         <label>Name <input id="pkm-ab-name" value="{{ ab0.name if ab0 else '' }}"></label>
@@ -272,6 +275,8 @@ function fillFromCard(card) {
     document.getElementById('pkm-types').value = (p.types || []).join(', ');
     document.getElementById('pkm-subtypes').value = (p.subtypes || []).join(', ');
     document.getElementById('pkm-supertype').value = p.supertype || 'Pokémon';
+    const rules = p.rules || [];
+    document.getElementById('pkm-rules').value = Array.isArray(rules) ? rules.join('\n\n') : (rules || '');
     const ab = (p.abilities || [])[0] || {};
     document.getElementById('pkm-ab-name').value = ab.name || '';
     document.getElementById('pkm-ab-text').value = ab.text || '';
@@ -338,6 +343,10 @@ function buildCard() {
     p.types = document.getElementById('pkm-types').value.split(',').map(s => s.trim()).filter(Boolean);
     p.subtypes = document.getElementById('pkm-subtypes').value.split(',').map(s => s.trim()).filter(Boolean);
     p.supertype = document.getElementById('pkm-supertype').value;
+    const rulesRaw = document.getElementById('pkm-rules').value.trim();
+    p.rules = rulesRaw
+      ? rulesRaw.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean)
+      : [];
     const abName = document.getElementById('pkm-ab-name').value.trim();
     const abText = document.getElementById('pkm-ab-text').value.trim();
     p.abilities = (abName || abText) ? [{ name: abName, text: abText }] : [];
