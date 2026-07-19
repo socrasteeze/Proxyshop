@@ -72,6 +72,16 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
 - **High-quality images**: full-card scans (745×1040 PNG) and art crops are
   fetched on demand and cached under `/data/images/` — each image downloads
   exactly once.
+- **Multi-game search ("self-hosted Scryfall")**: the *Card Search* page is a
+  visual card browser — pick a game, search, see a grid of card images, click
+  through to a detail view with the full-size scan, attributes, prices, and
+  HQ download buttons. Supported games: **MTG** (Scryfall),
+  **Pokémon** ([pokemontcg.io](https://pokemontcg.io) — works keyless; a free
+  key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), and **Union Arena**
+  ([apitcg.com](https://apitcg.com) — requires a free key in
+  `PROXYSHOP_APITCG_KEY`). Everything found online is cached locally, so the
+  browser works offline for anything you've seen before. Rendering remains
+  MTG-only (Proxyshop's templates are MTG frames).
 - **Art-less rendering**: submitting a render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
 - **Print prep**: each saved deck has *Download images* — a ZIP of unique HQ

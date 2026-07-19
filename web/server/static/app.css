@@ -55,3 +55,14 @@ img.result { max-width: 100%; border-radius: 8px; border: 1px solid var(--border
   font-size: .75rem; background: #3a3d46; margin-right: .3rem; }
 .ok-dot, .off-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; }
 .ok-dot { background: var(--ok); } .off-dot { background: var(--err); }
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem; margin-top: .5rem;
+}
+.card-tile { display: block; text-align: center; color: var(--text); }
+.card-tile:hover { text-decoration: none; filter: brightness(1.12); }
+.card-tile img {
+  width: 100%; border-radius: 4.75% / 3.5%;
+  background: #3a3d46; min-height: 190px;
+}
+.card-tile .caption { display: block; font-size: .8rem; margin-top: .35rem; line-height: 1.3; }

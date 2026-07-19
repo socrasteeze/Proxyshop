@@ -15,6 +15,10 @@ services:
       # Set to "1" to forbid all live Scryfall calls (bulk/cache only)
       PROXYSHOP_OFFLINE: "0"
       PROXYSHOP_MAX_UPLOAD_MB: "50"
+      # Optional: raises pokemontcg.io rate limits (free key from pokemontcg.io)
+      PROXYSHOP_POKEMONTCG_KEY: ${PROXYSHOP_POKEMONTCG_KEY:-}
+      # Required for Union Arena search (free key from apitcg.com)
+      PROXYSHOP_APITCG_KEY: ${PROXYSHOP_APITCG_KEY:-}
     restart: unless-stopped
 
 volumes:

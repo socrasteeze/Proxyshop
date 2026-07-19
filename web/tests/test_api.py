@@ -288,6 +288,80 @@ class TestSheets:
         assert res.status_code == 422
 
 
+class TestMultiGameSearch:
+
+    def _pokemon_card(self, card_id='pkm-xy7-54', name='Gardevoir'):
+        return {'object': 'card', 'id': card_id, 'game': 'pokemon', 'name': name,
+                'set': 'xy7', 'set_name': 'Ancient Origins', 'collector_number': '54',
+                'lang': 'en', 'released_at': '2015-08-12',
+                'images': {'large': 'https://img.example/big.png'}}
+
+    def test_unknown_game_422(self, client):
+        res = client.get('/api/cards/search', params={'q': 'pikachu', 'game': 'yugioh'})
+        assert res.status_code == 422
+
+    def test_provider_fallback_caches(self, appmod, client, monkeypatch):
+        from web.shared import games as games_mod
+        appmod.OFFLINE = False
+        monkeypatch.setitem(
+            games_mod.PROVIDERS, 'pokemon',
+            lambda q, limit: [self._pokemon_card()])
+        body = client.get('/api/cards/search',
+                          params={'q': 'gardevoir', 'game': 'pokemon'}).json()
+        assert body['source'] == 'live'
+        assert body['cards'][0]['id'] == 'pkm-xy7-54'
+        # Cached: now resolves locally with the provider gone
+        monkeypatch.setitem(
+            games_mod.PROVIDERS, 'pokemon',
+            lambda q, limit: (_ for _ in ()).throw(AssertionError('should not be called')))
+        body2 = client.get('/api/cards/search',
+                           params={'q': 'gardevoir', 'game': 'pokemon'}).json()
+        assert body2['source'] == 'local'
+
+    def test_provider_error_502_with_message(self, appmod, client, monkeypatch):
+        from web.shared import games as games_mod
+        appmod.OFFLINE = False
+
+        def boom(q, limit):
+            raise games_mod.ProviderError('needs an API key')
+        monkeypatch.setitem(games_mod.PROVIDERS, 'union-arena', boom)
+        res = client.get('/api/cards/search',
+                         params={'q': 'itadori', 'game': 'union-arena'})
+        assert res.status_code == 502
+        assert 'API key' in res.json()['detail']
+
+    def test_offline_non_mtg_stays_local(self, client):
+        body = client.get('/api/cards/search',
+                          params={'q': 'gardevoir', 'game': 'pokemon'}).json()
+        assert body == {'source': 'local', 'game': 'pokemon', 'cards': []}
+
+
+class TestCardViews:
+
+    def test_card_detail_page(self, appmod, client):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        res = client.get('/card/id-1')
+        assert res.status_code == 200
+        assert 'Lightning Bolt' in res.text
+        assert '/api/cards/id-1/image?kind=png' in res.text
+
+    def test_card_detail_404(self, client):
+        assert client.get('/card/nope').status_code == 404
+
+    def test_card_image_endpoint(self, appmod, client):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        appmod.carddb._session = FakeImageSession()
+        appmod.OFFLINE = False
+        res = client.get('/api/cards/id-1/image', params={'kind': 'png'})
+        assert res.status_code == 200
+        assert res.content[:8] == b'\x89PNG\r\n\x1a\n'
+
+    def test_card_image_bad_kind_422(self, appmod, client):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        assert client.get('/api/cards/id-1/image',
+                          params={'kind': 'huge'}).status_code == 422
+
+
 class TestDeckImport:
 
     def test_paste_import_offline(self, appmod, client):
@@ -316,7 +390,7 @@ class TestDeckImport:
         assert body['source'] == 'local'
         assert body['cards'][0]['name'] == 'Lightning Bolt'
         short = client.get('/api/cards/search', params={'q': 'x'}).json()
-        assert short == {'source': 'local', 'cards': []}
+        assert short == {'source': 'local', 'game': 'mtg', 'cards': []}
 
     def test_card_search_offline_miss_stays_empty(self, client):
         # Offline mode: no local match must NOT attempt a Scryfall call

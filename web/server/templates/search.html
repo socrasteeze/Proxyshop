@@ -3,12 +3,16 @@
 {% block content %}
 
 <div class="panel">
-  <h2>Search the local card database</h2>
+  <h2>Search cards &amp; pull high-quality images</h2>
   <p class="muted">{{ '{:,}'.format(stats.cards) }} cards cached
-    {% if stats.bulk_imported_at %} · bulk import {{ stats.bulk_imported_at }}
-    {% else %} · run a bulk import to search all of Magic offline{% endif %}
-  </p>
-  <form action="/search" method="get" style="display:flex; gap:.7rem; max-width:480px">
+    {% if stats.bulk_imported_at %} · MTG bulk import {{ stats.bulk_imported_at }}{% endif %}
+    · results found online are cached automatically</p>
+  <form action="/search" method="get" style="display:flex; gap:.7rem; max-width:600px">
+    <select name="game" style="width:12rem">
+      {% for g, label in games.items() %}
+      <option value="{{ g }}" {% if g == game %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
     <input name="q" value="{{ q }}" placeholder="Card name…" style="flex:1" minlength="2">
     <button type="submit">Search</button>
   </form>
@@ -16,32 +20,32 @@
 
 {% if q %}
 <div class="panel">
-  <h2>Results for “{{ q }}”</h2>
-  {% if results and source == 'scryfall' %}
-  <p class="muted">No local matches — fetched live from Scryfall and cached for next time.</p>
+  <h2>Results for “{{ q }}” <span class="pill">{{ games[game] }}</span></h2>
+  {% if error %}
+  <p style="color: var(--err)">{{ error }}</p>
   {% endif %}
-  <table>
-    <thead><tr><th>Name</th><th>Set</th><th>#</th><th>Released</th><th>Price</th></tr></thead>
-    <tbody>
-      {% for c in results %}
-      {% set p = prices.get(c.id) %}
-      <tr>
-        <td>{{ c.name }}</td>
-        <td>{{ (c.set or '')|upper }}</td>
-        <td>{{ c.collector_number }}</td>
-        <td class="muted">{{ c.released_at }}</td>
-        <td>{% if p and p.usd is not none %}${{ '%.2f'|format(p.usd) }}
-            {% elif p and p.eur is not none %}€{{ '%.2f'|format(p.eur) }}
-            {% else %}<span class="muted">—</span>{% endif %}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5" class="muted">
-        {% if offline %}No local matches (offline mode — live Scryfall lookups are disabled).
-        {% else %}No matches locally or on Scryfall — check the spelling.{% endif %}
-      </td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% if results and source != 'local' %}
+  <p class="muted">No local matches — fetched live and cached for next time.</p>
+  {% endif %}
+  {% if results %}
+  <div class="card-grid">
+    {% for c in results %}
+    {% set p = prices.get(c.id) %}
+    <a class="card-tile" href="/card/{{ c.id }}">
+      <img loading="lazy" src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+      <span class="caption">{{ c.name }}<br>
+        <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
+          {% if p and p.usd is not none %} · ${{ '%.2f'|format(p.usd) }}{% endif %}
+        </span></span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">
+    {% if offline %}No local matches (offline mode — live lookups are disabled).
+    {% else %}No matches locally or online — check the spelling.{% endif %}
+  </p>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

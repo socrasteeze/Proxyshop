@@ -58,11 +58,13 @@ CREATE TABLE IF NOT EXISTS cards (
     released_at TEXT,
     json BLOB NOT NULL,
     fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
-    source TEXT NOT NULL DEFAULT 'api'
+    source TEXT NOT NULL DEFAULT 'api',
+    game TEXT NOT NULL DEFAULT 'mtg'
 );
 CREATE INDEX IF NOT EXISTS idx_cards_set_num ON cards (set_code, collector_number, lang);
 CREATE INDEX IF NOT EXISTS idx_cards_name ON cards (name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards (oracle_id);
+CREATE INDEX IF NOT EXISTS idx_cards_game ON cards (game, name COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -221,8 +223,19 @@ class CardDB:
         self._session = session
         self._local = threading.local()
         with self._conn() as con:
+            # Migrate BEFORE applying the schema: SCHEMA's index statements
+            # reference columns that pre-multigame databases don't have yet.
+            self._migrate(con)
             con.executescript(SCHEMA)
             con.execute('PRAGMA journal_mode=WAL')
+
+    @staticmethod
+    def _migrate(con: sqlite3.Connection) -> None:
+        """Additive migrations for databases created by older versions."""
+        cols = {r[1] for r in con.execute('PRAGMA table_info(cards)').fetchall()}
+        if cols and 'game' not in cols:
+            con.execute("ALTER TABLE cards ADD COLUMN game TEXT NOT NULL DEFAULT 'mtg'")
+            con.commit()
 
     @property
     def session(self) -> ScryfallSession:
@@ -250,19 +263,26 @@ class CardDB:
     * Storage
     """
 
-    def store_card(self, card: dict, source: str = 'api', commit: bool = True) -> None:
-        """Insert or update a Scryfall card object."""
+    def store_card(
+        self,
+        card: dict,
+        source: str = 'api',
+        commit: bool = True,
+        game: str = 'mtg'
+    ) -> None:
+        """Insert or update a card object (Scryfall-shaped; any game)."""
         con = self._conn()
         con.execute(
             """
             INSERT INTO cards (id, oracle_id, name, set_code, collector_number,
-                               lang, released_at, json, fetched_at, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+                               lang, released_at, json, fetched_at, source, game)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 oracle_id=excluded.oracle_id, name=excluded.name,
                 set_code=excluded.set_code, collector_number=excluded.collector_number,
                 lang=excluded.lang, released_at=excluded.released_at,
-                json=excluded.json, fetched_at=excluded.fetched_at, source=excluded.source
+                json=excluded.json, fetched_at=excluded.fetched_at,
+                source=excluded.source, game=excluded.game
             """, (
                 card['id'],
                 card.get('oracle_id'),
@@ -272,7 +292,8 @@ class CardDB:
                 card.get('lang', 'en'),
                 card.get('released_at'),
                 json.dumps(card, separators=(',', ':')),
-                source
+                source,
+                card.get('game', game)
             ))
         self._store_scryfall_prices(card)
         if commit:
@@ -404,19 +425,19 @@ class CardDB:
             'SELECT json FROM cards WHERE id=?', (card_id,)).fetchone()
         return json.loads(row['json']) if row else None
 
-    def search_local(self, text: str, limit: int = 50) -> list[dict]:
+    def search_local(self, text: str, limit: int = 50, game: str = 'mtg') -> list[dict]:
         """Substring name search against the local DB only (no network).
 
-        Returns one row per name+set (deduplicated by printing), newest first.
+        Returns one row per printing, name-ordered then newest first.
         """
         con = self._conn()
         rows = con.execute(
             """
             SELECT json FROM cards
-            WHERE name LIKE ? COLLATE NOCASE AND lang='en'
+            WHERE name LIKE ? COLLATE NOCASE AND lang='en' AND game=?
             ORDER BY name COLLATE NOCASE ASC, released_at DESC
             LIMIT ?
-            """, (f'%{text}%', int(limit))).fetchall()
+            """, (f'%{text}%', game, int(limit))).fetchall()
         return [json.loads(r['json']) for r in rows]
 
     def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:

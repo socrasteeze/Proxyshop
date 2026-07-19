@@ -8,11 +8,12 @@
 # Standard Library Imports
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 # Local Imports
 from web.shared.carddb import ScryfallSession
 
-# Image kind -> file extension (Scryfall serves png for 'png', jpg otherwise)
+# Image kind -> fallback file extension (Scryfall serves png for 'png', jpg otherwise)
 IMAGE_KINDS = {
     'png': '.png',           # 745x1040 hi-res full card scan
     'large': '.jpg',         # 672x936 full card scan
@@ -22,7 +23,17 @@ IMAGE_KINDS = {
 
 
 def image_uri(card: dict, kind: str) -> Optional[str]:
-    """Resolve an image URI from a Scryfall card object (front face for DFCs)."""
+    """Resolve an image URI from a cached card object.
+
+    MTG cards use Scryfall's image_uris (front face for DFCs). Other games
+    (pokemon, union-arena) carry a normalized images block where 'large' is
+    the highest quality available — 'png'/'large' both map to it.
+    """
+    if card.get('game', 'mtg') != 'mtg':
+        images = card.get('images') or {}
+        if kind in ('png', 'large', 'border_crop'):
+            return images.get('large') or images.get('small')
+        return None  # no art crops outside MTG
     uris = card.get('image_uris')
     if not uris and card.get('card_faces'):
         uris = (card['card_faces'][0] or {}).get('image_uris')
@@ -53,14 +64,18 @@ def ensure_image(
     card_id = card.get('id')
     if not card_id:
         return None
-    path = dest_dir / f'{card_id}-{kind}{IMAGE_KINDS[kind]}'
-    if path.exists():
-        return path
+    # Cached under any extension (providers serve png/jpg/webp variously)
+    cached = sorted(dest_dir.glob(f'{card_id}-{kind}.*'))
+    cached = [p for p in cached if not p.name.endswith('.part')]
+    if cached:
+        return cached[0]
     if offline:
         return None
     uri = image_uri(card, kind)
     if not uri:
         return None
+    ext = Path(urlparse(uri).path).suffix.lower() or IMAGE_KINDS[kind]
+    path = dest_dir / f'{card_id}-{kind}{ext}'
     dest_dir.mkdir(parents=True, exist_ok=True)
     res = session.get(uri, stream=True)
     if res.status_code != 200:

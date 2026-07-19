@@ -32,7 +32,7 @@ from fastapi.templating import Jinja2Templates
 
 # Local Imports
 from web.server.db import JobStore
-from web.shared import images, sheets
+from web.shared import games, images, sheets
 from web.shared.carddb import CardDB
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
@@ -75,6 +75,7 @@ RATE_LIMITS = {
     'submit': (20, 60),      # job submissions
     'import': (6, 60),       # deck imports (may fan out to Scryfall)
     'api': (120, 60),        # general API reads
+    'image': (300, 60),      # image serves (mostly cache hits; grids load many)
 }
 _hits: dict[tuple[str, str], deque] = defaultdict(deque)
 
@@ -184,21 +185,46 @@ def page_decks(request: Request):
     })
 
 
-def _search_cards(q: str, limit: int) -> tuple[list[dict], str]:
-    """Local-first card search with live Scryfall fallback (cache-through)."""
-    results = carddb.search_local(q, limit=limit)
+def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], str]:
+    """Local-first card search with live provider fallback (cache-through).
+
+    MTG falls back to Scryfall; other games use their provider from
+    web.shared.games. Fallback results are always cached locally.
+    """
+    if game not in games.GAMES:
+        raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
+    results = carddb.search_local(q, limit=limit, game=game)
     if results:
         return results, 'local'
-    results = carddb.search_scryfall(q, limit=limit)
-    return results, 'scryfall'
+    if game == 'mtg':
+        return carddb.search_scryfall(q, limit=limit), 'scryfall'
+    if OFFLINE:
+        return [], 'local'
+    try:
+        results = games.PROVIDERS[game](q, limit)
+    except games.ProviderError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=502, detail=f'{games.GAME_LABELS[game]} provider unavailable')
+    for card in results:
+        carddb.store_card(card, commit=False, game=game)
+    carddb._conn().commit()
+    return results, 'live'
 
 
 @app.get('/search', response_class=HTMLResponse)
-def page_search(request: Request, q: str = ''):
-    results, source = _search_cards(q, 60) if len(q) >= 2 else ([], 'local')
+def page_search(request: Request, q: str = '', game: str = 'mtg'):
+    results, source, error = [], 'local', None
+    if len(q) >= 2:
+        try:
+            results, source = _search_cards(q, 60, game)
+        except HTTPException as e:
+            error = e.detail  # show provider problems inline instead of a bare 502
     prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
     return templates.TemplateResponse(request, 'search.html', {
-        'q': q, 'results': results, 'source': source, 'prices': prices,
+        'q': q, 'game': game, 'games': games.GAME_LABELS,
+        'results': results, 'source': source, 'prices': prices, 'error': error,
         'offline': OFFLINE, 'stats': carddb.stats()})
 
 
@@ -316,26 +342,86 @@ def api_templates(request: Request):
 
 
 @app.get('/api/cards/search')
-def api_card_search(request: Request, q: str, limit: int = 30):
-    """Card search: local DB first, live Scryfall fallback (results cached)."""
+def api_card_search(request: Request, q: str, limit: int = 30, game: str = 'mtg'):
+    """Card search: local DB first, live provider fallback (results cached)."""
     rate_limit(request, 'api')
     if len(q) < 2:
-        return {'source': 'local', 'cards': []}
-    results, source = _search_cards(q, min(limit, 100))
+        return {'source': 'local', 'game': game, 'cards': []}
+    results, source = _search_cards(q, min(limit, 100), game)
     prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
     return {
         'source': source,
+        'game': game,
         'cards': [
             {
                 'id': c.get('id'),
                 'name': c.get('name'),
                 'set': c.get('set'),
+                'set_name': c.get('set_name'),
                 'collector_number': c.get('collector_number'),
                 'released_at': c.get('released_at'),
                 'usd': (prices.get(c.get('id')) or {}).get('usd'),
                 'eur': (prices.get(c.get('id')) or {}).get('eur'),
             }
             for c in results]}
+
+
+@app.get('/card/{card_id}', response_class=HTMLResponse)
+def page_card(request: Request, card_id: str):
+    """Card detail view: big scan + attributes, any game."""
+    card = carddb.get_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail='Card not in the local database')
+    game = card.get('game', 'mtg')
+    provider = card.get('provider_data') or {}
+
+    def first(*keys):
+        for k in keys:
+            v = card.get(k) or provider.get(k)
+            if v:
+                return v
+        return None
+
+    details = [(label, value) for label, value in [
+        ('Set', f"{first('set_name') or (card.get('set') or '').upper()}"
+                + (f" · #{card.get('collector_number')}" if card.get('collector_number') else '')),
+        ('Mana cost', first('mana_cost')),
+        ('Type', first('type_line', 'supertype')),
+        ('Text', first('oracle_text', 'effect', 'ability')),
+        ('P/T', f"{card.get('power')}/{card.get('toughness')}"
+                if card.get('power') is not None else None),
+        ('HP', provider.get('hp')),
+        ('Rarity', first('rarity')),
+        ('Artist', first('artist')),
+        ('Released', first('released_at')),
+    ] if value]
+    price = carddb.get_prices([card_id]).get(card_id)
+    return templates.TemplateResponse(request, 'card.html', {
+        'card': card, 'game': game, 'game_label': games.GAME_LABELS.get(game, game),
+        'details': details, 'price': price,
+        'has_art_crop': game == 'mtg',
+    })
+
+
+@app.get('/api/cards/{card_id}/image')
+def api_card_image(request: Request, card_id: str, kind: str = 'png'):
+    """Download a card's high-quality image (any game), cached on first pull."""
+    rate_limit(request, 'image')
+    if kind not in images.IMAGE_KINDS:
+        raise HTTPException(status_code=422, detail=f'Unknown image kind {kind!r}')
+    card = carddb.get_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail='Card not in the local database')
+    path = images.ensure_image(carddb.session, card, kind, IMAGES_DIR, offline=OFFLINE)
+    if not path:
+        raise HTTPException(
+            status_code=404,
+            detail='Image unavailable'
+                   + (' (offline mode: only cached images can be served)' if OFFLINE else ''))
+    safe = re.sub(r'[^-\w. \[\]{}()\']', '_', (
+        f"{card.get('name', 'card')} [{(card.get('set') or '').upper()}] "
+        f"{card.get('collector_number', '')}").strip())
+    return FileResponse(path, filename=f'{safe}{path.suffix}')
 
 
 @app.post('/api/decks/import')
