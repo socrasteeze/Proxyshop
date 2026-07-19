@@ -135,6 +135,17 @@ def _request(
             res = requests.get(
                 url, params=params or {}, headers=headers, timeout=30,
                 allow_redirects=True)
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError) as e:
+            # Transient network hiccups (read timeout, dropped connection) are
+            # common on long catalog runs — retry with backoff instead of
+            # crashing the whole download.
+            last_err = ProviderError(f'Provider connection error: {e}')
+            if attempt >= PROVIDER_MAX_RETRIES:
+                raise last_err from e
+            time.sleep(min(30.0, 1.5 * (2 ** attempt)))
+            continue
         except requests.RequestException as e:
             raise ProviderError(f'Provider request failed: {e}') from e
         if res.status_code in (301, 302, 307, 308):

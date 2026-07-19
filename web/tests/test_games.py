@@ -362,3 +362,54 @@ class TestNonMtgImages:
         assert path.suffix == '.webp'
         # Cached lookup finds it despite the non-default extension
         assert images.ensure_image(Session(), card, 'png', tmp_path, offline=True) == path
+
+    def test_image_download_network_error_is_non_fatal(self, tmp_path):
+        import requests
+
+        class BadSession:
+            def get(self, url, **kwargs):
+                raise requests.exceptions.ConnectionError('dropped')
+
+        card = {'game': 'pokemon', 'id': 'pkm-x',
+                'images': {'large': 'https://img.example/x.png'}}
+        # A network error mid-image returns None (counted as a failure), never raises
+        assert images.ensure_image(BadSession(), card, 'png', tmp_path) is None
+        # No stray .part file left behind
+        assert list(tmp_path.glob('*.part')) == []
+
+
+class TestProviderRetries:
+
+    def test_request_retries_transient_then_succeeds(self, monkeypatch):
+        import requests
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        monkeypatch.setattr(games, 'PROVIDER_MAX_RETRIES', 3)
+        calls = {'n': 0}
+
+        class Res:
+            status_code = 200
+            def json(self):
+                return {'data': []}
+
+        def flaky_get(url, **kwargs):
+            calls['n'] += 1
+            if calls['n'] < 3:
+                raise requests.exceptions.ReadTimeout('read timed out')
+            return Res()
+
+        monkeypatch.setattr(games.requests, 'get', flaky_get)
+        res = games._request('https://api.example/cards')
+        assert res.status_code == 200
+        assert calls['n'] == 3  # failed twice, succeeded on the third
+
+    def test_request_gives_up_after_max_retries(self, monkeypatch):
+        import requests
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        monkeypatch.setattr(games, 'PROVIDER_MAX_RETRIES', 2)
+
+        def always_drop(url, **kwargs):
+            raise requests.exceptions.ConnectionError('remote disconnected')
+
+        monkeypatch.setattr(games.requests, 'get', always_drop)
+        with pytest.raises(games.ProviderError, match='connection error'):
+            games._request('https://api.example/cards')

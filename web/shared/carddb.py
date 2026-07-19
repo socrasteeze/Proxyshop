@@ -150,11 +150,21 @@ class ScryfallSession:
             self._last_request = time.monotonic()
 
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Perform a throttled request, honoring 429 Retry-After with bounded retries."""
+        """Perform a throttled request, retrying 429s and transient network
+        errors (timeouts, dropped connections) with bounded backoff."""
         kwargs.setdefault('timeout', 30)
         for attempt in range(MAX_RETRIES + 1):
             self._throttle()
-            res = self._session.request(method, url, **kwargs)
+            try:
+                res = self._session.request(method, url, **kwargs)
+            except (requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.ChunkedEncodingError):
+                # Transient network hiccup — retry with backoff, else re-raise.
+                if attempt == MAX_RETRIES:
+                    raise
+                time.sleep(min(30.0, 0.5 * (2 ** attempt)))
+                continue
             if res.status_code != 429:
                 return res
             if attempt == MAX_RETRIES:

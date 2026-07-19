@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+# Third Party Imports
+import requests
+
 # Local Imports
 from web.shared.carddb import ScryfallSession
 
@@ -97,12 +100,18 @@ def ensure_image(
         ext = IMAGE_KINDS[kind]
     path = dest_dir / f'{card_id}-{kind}{ext}'
     dest_dir.mkdir(parents=True, exist_ok=True)
-    res = session.get(uri, stream=True)
-    if res.status_code != 200:
-        return None
     tmp = path.with_suffix(path.suffix + '.part')
-    with open(tmp, 'wb') as f:
-        for chunk in res.iter_content(chunk_size=1 << 20):
-            f.write(chunk)
-    tmp.rename(path)
-    return path
+    try:
+        res = session.get(uri, stream=True)
+        if res.status_code != 200:
+            return None
+        with open(tmp, 'wb') as f:
+            for chunk in res.iter_content(chunk_size=1 << 20):
+                f.write(chunk)
+        tmp.rename(path)
+        return path
+    except requests.RequestException:
+        # Transient network error mid-image: leave it uncached (counted as a
+        # failure by the caller) rather than crashing the whole catalog run.
+        tmp.unlink(missing_ok=True)
+        return None
