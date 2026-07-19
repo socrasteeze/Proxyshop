@@ -38,9 +38,8 @@
 
   <div id="cache-filters-mtg" class="cache-filters" hidden>
     <div class="field-row field-row--3">
-      <label>Set code
-        <input id="cf-mtg-set" list="cf-mtg-sets" placeholder="mh3" autocomplete="off">
-        <datalist id="cf-mtg-sets"></datalist>
+      <label>Set
+        <input id="cf-mtg-set" placeholder="Search set name or code…" autocomplete="off">
       </label>
       <label>Type
         <input id="cf-mtg-type" placeholder="creature" autocomplete="off">
@@ -81,9 +80,8 @@
 
   <div id="cache-filters-pokemon" class="cache-filters" hidden>
     <div class="field-row field-row--3">
-      <label>Set id
-        <input id="cf-pkm-set" list="cf-pkm-sets" placeholder="sv3" autocomplete="off">
-        <datalist id="cf-pkm-sets"></datalist>
+      <label>Set
+        <input id="cf-pkm-set" placeholder="Search set name or id…" autocomplete="off">
       </label>
       <label>Type
         <select id="cf-pkm-type"><option value="">Any</option></select>
@@ -194,15 +192,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const filtSmall = document.getElementById('cache-filters-small');
   let pollTimer = null;
   let optionsCache = {};
+  let mtgSetPicker = null;
+  let pkmSetPicker = null;
 
   function fillDatalist(el, rows, idKey='id', nameKey='name') {
+    if (!el) return;
     el.innerHTML = '';
     (rows || []).forEach((row) => {
       const opt = document.createElement('option');
       const id = row[idKey] || row;
       const name = row[nameKey] || id;
-      opt.value = id;
-      opt.label = `${id} — ${name}`;
+      opt.value = typeof row === 'string' ? row : id;
+      if (typeof row !== 'string' && name && name !== id) opt.label = name;
       el.appendChild(opt);
     });
   }
@@ -219,14 +220,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if ([...el.options].some((o) => o.value === current)) el.value = current;
   }
 
+  function ensureSetPickers() {
+    if (!mtgSetPicker) {
+      mtgSetPicker = wireSetPicker(document.getElementById('cf-mtg-set'), {
+        getItems: () => (optionsCache.mtg && optionsCache.mtg.sets) || [],
+        limit: 14,
+      });
+    }
+    if (!pkmSetPicker) {
+      pkmSetPicker = wireSetPicker(document.getElementById('cf-pkm-set'), {
+        getItems: () => (optionsCache.pokemon && optionsCache.pokemon.sets) || [],
+        limit: 14,
+      });
+    }
+  }
+
   async function loadOptions(g) {
-    if (optionsCache[g]) return optionsCache[g];
+    ensureSetPickers();
+    if (optionsCache[g]) {
+      if (g === 'mtg' && mtgSetPicker) mtgSetPicker.syncHintFromValue();
+      if (g === 'pokemon' && pkmSetPicker) pkmSetPicker.syncHintFromValue();
+      return optionsCache[g];
+    }
     const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/options`);
     if (!res.ok) return null;
     const body = await res.json();
     optionsCache[g] = body;
     if (g === 'mtg') {
-      fillDatalist(document.getElementById('cf-mtg-sets'), body.sets || []);
       fillSelect(document.getElementById('cf-mtg-rarity'), body.rarities || [], true);
       const art = document.getElementById('cf-mtg-art');
       art.innerHTML = '';
@@ -236,15 +256,16 @@ document.addEventListener('DOMContentLoaded', () => {
         opt.textContent = f;
         art.appendChild(opt);
       });
+      if (mtgSetPicker) mtgSetPicker.syncHintFromValue();
     }
     if (g === 'pokemon') {
-      fillDatalist(document.getElementById('cf-pkm-sets'), body.sets || []);
       fillSelect(document.getElementById('cf-pkm-type'), body.types || [], true);
       fillSelect(document.getElementById('cf-pkm-supertype'), body.supertypes || [], true);
       fillDatalist(document.getElementById('cf-pkm-subtypes'),
         (body.subtypes || []).map((s) => ({ id: s, name: s })));
       fillDatalist(document.getElementById('cf-pkm-rarities'),
         (body.rarities || []).map((s) => ({ id: s, name: s })));
+      if (pkmSetPicker) pkmSetPicker.syncHintFromValue();
     }
     return body;
   }

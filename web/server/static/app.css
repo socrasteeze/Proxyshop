@@ -353,6 +353,24 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   text-overflow: ellipsis;
 }
 .typeahead-empty { padding: .7rem .8rem; }
+.set-picker { width: 100%; }
+.set-picker-hint {
+  margin-top: .35rem;
+  font-size: .78rem;
+  line-height: 1.35;
+}
+.set-picker-drop { max-height: 320px; }
+.set-picker-code {
+  flex: 0 0 4.2rem;
+  font: 600 .78rem/1.2 ui-monospace, Consolas, monospace;
+  color: var(--accent);
+  text-align: left;
+  padding-top: .15rem;
+}
+.set-picker .typeahead-item {
+  align-items: flex-start;
+  gap: .75rem;
+}
 
 /* Make workspace — cardmaker-style: preview + scrollable form
    Breakpoints: wide >=1100, medium 720–1099, narrow <720 */
