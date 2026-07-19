@@ -191,8 +191,9 @@ def _search_cards(q: str, limit: int) -> tuple[list[dict], str]:
 @app.get('/search', response_class=HTMLResponse)
 def page_search(request: Request, q: str = ''):
     results, source = _search_cards(q, 60) if len(q) >= 2 else ([], 'local')
+    prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
     return templates.TemplateResponse(request, 'search.html', {
-        'q': q, 'results': results, 'source': source,
+        'q': q, 'results': results, 'source': source, 'prices': prices,
         'offline': OFFLINE, 'stats': carddb.stats()})
 
 
@@ -291,6 +292,7 @@ def api_card_search(request: Request, q: str, limit: int = 30):
     if len(q) < 2:
         return {'source': 'local', 'cards': []}
     results, source = _search_cards(q, min(limit, 100))
+    prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
     return {
         'source': source,
         'cards': [
@@ -300,6 +302,8 @@ def api_card_search(request: Request, q: str, limit: int = 30):
                 'set': c.get('set'),
                 'collector_number': c.get('collector_number'),
                 'released_at': c.get('released_at'),
+                'usd': (prices.get(c.get('id')) or {}).get('usd'),
+                'eur': (prices.get(c.get('id')) or {}).get('eur'),
             }
             for c in results]}
 

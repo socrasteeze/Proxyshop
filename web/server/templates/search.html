@@ -21,17 +21,21 @@
   <p class="muted">No local matches — fetched live from Scryfall and cached for next time.</p>
   {% endif %}
   <table>
-    <thead><tr><th>Name</th><th>Set</th><th>#</th><th>Released</th></tr></thead>
+    <thead><tr><th>Name</th><th>Set</th><th>#</th><th>Released</th><th>Price</th></tr></thead>
     <tbody>
       {% for c in results %}
+      {% set p = prices.get(c.id) %}
       <tr>
         <td>{{ c.name }}</td>
         <td>{{ (c.set or '')|upper }}</td>
         <td>{{ c.collector_number }}</td>
         <td class="muted">{{ c.released_at }}</td>
+        <td>{% if p and p.usd is not none %}${{ '%.2f'|format(p.usd) }}
+            {% elif p and p.eur is not none %}€{{ '%.2f'|format(p.eur) }}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="muted">
+      <tr><td colspan="5" class="muted">
         {% if offline %}No local matches (offline mode — live Scryfall lookups are disabled).
         {% else %}No matches locally or on Scryfall — check the spelling.{% endif %}
       </td></tr>

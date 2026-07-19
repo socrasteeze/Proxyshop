@@ -28,16 +28,17 @@
     <h2>Saved decks</h2>
     <p class="muted">{{ '{:,}'.format(stats.cards) }} cards in the local database.</p>
     <table>
-      <thead><tr><th>Name</th><th>Cards</th><th>Imported</th></tr></thead>
+      <thead><tr><th>Name</th><th>Cards</th><th>Est. value</th><th>Imported</th></tr></thead>
       <tbody>
         {% for d in decks %}
         <tr>
           <td>{% if d.source_url %}<a href="{{ d.source_url }}" rel="noopener">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td>{{ d.cards }}</td>
+          <td>{% if d.value_usd %}${{ '%.2f'|format(d.value_usd) }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="muted">{{ d.created_at }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="3" class="muted">No decks imported yet.</td></tr>
+        <tr><td colspan="4" class="muted">No decks imported yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

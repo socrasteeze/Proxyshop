@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS prices (
+    card_id TEXT PRIMARY KEY,
+    usd REAL,
+    usd_foil REAL,
+    eur REAL,
+    source TEXT NOT NULL DEFAULT 'scryfall',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS decks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -265,8 +274,57 @@ class CardDB:
                 json.dumps(card, separators=(',', ':')),
                 source
             ))
+        self._store_scryfall_prices(card)
         if commit:
             con.commit()
+
+    def _store_scryfall_prices(self, card: dict) -> None:
+        """Extract the prices block embedded in a Scryfall card object."""
+        prices = card.get('prices') or {}
+
+        def _num(key: str) -> Optional[float]:
+            try:
+                return float(prices[key]) if prices.get(key) is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        usd, usd_foil, eur = _num('usd'), _num('usd_foil'), _num('eur')
+        if usd is None and usd_foil is None and eur is None:
+            return
+        self.set_price(card['id'], usd=usd, usd_foil=usd_foil, eur=eur,
+                       source='scryfall', commit=False)
+
+    def set_price(
+        self,
+        card_id: str,
+        usd: Optional[float] = None,
+        usd_foil: Optional[float] = None,
+        eur: Optional[float] = None,
+        source: str = 'scryfall',
+        commit: bool = True
+    ) -> None:
+        """Insert or update a card's price row (last writer wins)."""
+        con = self._conn()
+        con.execute(
+            """
+            INSERT INTO prices (card_id, usd, usd_foil, eur, source, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT (card_id) DO UPDATE SET
+                usd=excluded.usd, usd_foil=excluded.usd_foil, eur=excluded.eur,
+                source=excluded.source, updated_at=excluded.updated_at
+            """, (card_id, usd, usd_foil, eur, source))
+        if commit:
+            con.commit()
+
+    def get_prices(self, card_ids: list[str]) -> dict[str, dict]:
+        """Fetch price rows for a batch of card ids. Returns {card_id: row}."""
+        if not card_ids:
+            return {}
+        con = self._conn()
+        marks = ','.join('?' * len(card_ids))
+        rows = con.execute(
+            f'SELECT * FROM prices WHERE card_id IN ({marks})', card_ids).fetchall()
+        return {r['card_id']: dict(r) for r in rows}
 
     """
     * Lookups (cache first, then API unless offline)
@@ -526,8 +584,11 @@ class CardDB:
         rows = self._conn().execute(
             """
             SELECT d.id, d.name, d.source_url, d.created_at,
-                   COALESCE(SUM(dc.qty), 0) AS cards
-            FROM decks d LEFT JOIN deck_cards dc ON dc.deck_id = d.id
+                   COALESCE(SUM(dc.qty), 0) AS cards,
+                   ROUND(SUM(dc.qty * p.usd), 2) AS value_usd
+            FROM decks d
+            LEFT JOIN deck_cards dc ON dc.deck_id = d.id
+            LEFT JOIN prices p ON p.card_id = dc.card_id
             GROUP BY d.id ORDER BY d.created_at DESC
             """).fetchall()
         return [dict(r) for r in rows]
@@ -564,6 +625,8 @@ class CardDB:
         return {
             'cards': con.execute('SELECT COUNT(*) c FROM cards').fetchone()['c'],
             'decks': con.execute('SELECT COUNT(*) c FROM decks').fetchone()['c'],
+            'prices': con.execute('SELECT COUNT(*) c FROM prices').fetchone()['c'],
             'bulk_imported_at': self.get_meta('bulk_imported_at'),
             'bulk_file': self.get_meta('bulk_file'),
+            'mtgjson_prices_at': self.get_meta('mtgjson_prices_at'),
         }

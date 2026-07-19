@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     p_imp = sub.add_parser('bulk-import', help='Import a local Scryfall bulk data JSON file')
     p_imp.add_argument('file', type=Path)
 
+    p_mtg = sub.add_parser(
+        'mtgjson-prices',
+        help='Download MTGJSON price data and update prices for cached cards')
+    p_mtg.add_argument('--keep', action='store_true', help='Keep the downloaded JSON files')
+
     sub.add_parser('stats', help='Show card DB statistics')
 
     args = parser.parse_args(argv)
@@ -50,6 +55,21 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         count = db.import_bulk(args.file)
         print(f'Imported {count:,} cards.')
+        return 0
+
+    if args.cmd == 'mtgjson-prices':
+        from web.shared import mtgjson
+        bulk_dir = DATA_DIR / 'bulk'
+        print('Downloading MTGJSON AllIdentifiers (large, may take a while)…')
+        idents = mtgjson.download(mtgjson.URL_IDENTIFIERS, bulk_dir)
+        print('Downloading MTGJSON AllPricesToday…')
+        prices = mtgjson.download(mtgjson.URL_PRICES_TODAY, bulk_dir)
+        print('Importing prices for cards in the local DB…')
+        count = mtgjson.import_prices(db, idents, prices)
+        print(f'Updated prices for {count:,} cards.')
+        if not args.keep:
+            idents.unlink(missing_ok=True)
+            prices.unlink(missing_ok=True)
         return 0
 
     if args.cmd == 'stats':

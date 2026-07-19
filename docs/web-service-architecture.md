@@ -72,6 +72,19 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
 - Scryfall etiquette is built in: identifying User-Agent, ≥100ms between
   requests, honoring `429 Retry-After`, bulk files preferred over API calls.
 - Set `PROXYSHOP_OFFLINE=1` to forbid all live Scryfall calls.
+- **Prices**: every cached card's Scryfall prices (USD/EUR) are stored
+  automatically and shown on the search page and as estimated deck values.
+  For richer aggregated paper prices (TCGplayer/Cardmarket via
+  [MTGJSON](https://mtgjson.com)), run:
+
+  ```bash
+  docker compose -f web/server/docker-compose.yml exec proxyshop-web \
+      python -m web.server.manage mtgjson-prices
+  ```
+
+  MTGJSON files are large; the importer stream-parses them, so it stays
+  NAS-friendly. Schedule it weekly alongside `bulk-download` if you want
+  fresh prices.
 
 Desktop Proxyshop can share the same cache: set `PROXYSHOP_CARD_CACHE=cache_first`
 (and optionally `PROXYSHOP_CARD_DB=path/to/cards.db`) before launching, and
