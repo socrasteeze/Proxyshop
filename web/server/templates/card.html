@@ -26,18 +26,18 @@
       </tbody>
     </table>
     <p style="margin-top:1rem">
-      <a href="/api/cards/{{ card.id }}/image?kind=png" download><button>Download HQ scan</button></a>
+      {% if game in ('mtg', 'pokemon', 'riftbound') %}
+      <a href="/edit?card_id={{ card.id }}"><button>Edit in browser</button></a>
+      {% endif %}
+      <a href="/api/cards/{{ card.id }}/image?kind=png" download><button style="background:#3a3d46">Download HQ scan</button></a>
       {% if has_art_crop %}
       <a href="/api/cards/{{ card.id }}/image?kind=art_crop" download>
         <button style="background:#3a3d46">Download art crop</button></a>
       {% endif %}
     </p>
-    {% if game == 'mtg' %}
-    <p class="muted">Render this card as a proxy from the <a href="/">Render page</a> —
-      leave the art upload empty to use its Scryfall art.</p>
-    {% elif game == 'pokemon' %}
-    <p class="muted">Render this card as a proxy from the <a href="/?game=pokemon">Render page</a>
-      (select Pokémon, upload art). Requires Pokémon templates installed on the Windows worker.</p>
+    {% if game in ('mtg', 'pokemon', 'riftbound') %}
+    <p class="muted">Browser editor uses NAS compose (swap art, edit text, download PNG).
+      For print-quality MTG frames, queue a Photoshop render from the <a href="/">Render page</a>.</p>
     {% endif %}
   </div>
 </div>

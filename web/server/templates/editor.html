@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}{% if card %}Edit {{ card.name }}{% else %}Card Editor{% endif %} — Proxyshop Web{% endblock %}
+{% block content %}
+
+{% if not card %}
+<div class="panel">
+  <h2>Card editor</h2>
+  <p class="muted">Open a card from <a href="/search">Card Search</a>, then click
+    <strong>Edit in browser</strong> on the detail page.</p>
+  <p class="muted">Supported: {{ compose_games | join(', ') }}.</p>
+</div>
+{% else %}
+
+<div class="grid2 editor-layout">
+  <div class="panel">
+    <h2>Edit · {{ game_label }}</h2>
+    <form class="stack" id="editor-form" style="max-width:none">
+      <input type="hidden" name="game" value="{{ game }}">
+      <input type="hidden" id="card-id" value="{{ card.id }}">
+
+      {% if game == 'mtg' %}
+      <label>Name <input name="name" id="f-name" value="{{ card.name or '' }}"></label>
+      <label>Mana cost <input name="mana_cost" id="f-mana" value="{{ card.mana_cost or '' }}" placeholder="{R}"></label>
+      <label>Type line <input name="type_line" id="f-type" value="{{ card.type_line or '' }}"></label>
+      <label>Oracle text <textarea name="oracle_text" id="f-oracle" rows="6">{{ card.oracle_text or '' }}</textarea></label>
+      <div style="display:flex; gap:.7rem">
+        <label style="flex:1">Power <input name="power" id="f-power" value="{{ card.power if card.power is not none else '' }}"></label>
+        <label style="flex:1">Toughness <input name="toughness" id="f-tough" value="{{ card.toughness if card.toughness is not none else '' }}"></label>
+      </div>
+      <label>Artist <input name="artist" id="f-artist" value="{{ card.artist or '' }}"></label>
+      <div style="display:flex; gap:.7rem">
+        <label style="flex:1">Set <input name="set" id="f-set" value="{{ card.set or '' }}"></label>
+        <label style="flex:1">Number <input name="collector_number" id="f-num" value="{{ card.collector_number or '' }}"></label>
+      </div>
+      {% elif game == 'pokemon' %}
+      {% set p = card.provider_data or {} %}
+      <label>Name <input id="f-name" value="{{ p.name or card.name or '' }}"></label>
+      <label>HP <input id="f-hp" value="{{ p.hp or '' }}"></label>
+      <label>Type <input id="f-types" value="{{ (p.types or [])|join(', ') }}" placeholder="Fire"></label>
+      <label>Subtype / stage <input id="f-subtypes" value="{{ (p.subtypes or [])|join(', ') }}" placeholder="Basic"></label>
+      <label>Supertype <input id="f-supertype" value="{{ p.supertype or 'Pokémon' }}"></label>
+      <label>Attacks (JSON) <textarea id="f-attacks" rows="5">{{ p.attacks | tojson if p.attacks else '[]' }}</textarea></label>
+      <label>Ability (JSON) <textarea id="f-abilities" rows="3">{{ p.abilities | tojson if p.abilities else '[]' }}</textarea></label>
+      <label>Artist <input id="f-artist" value="{{ p.artist or '' }}"></label>
+      <div style="display:flex; gap:.7rem">
+        <label style="flex:1">Set <input id="f-set" value="{{ card.set or '' }}"></label>
+        <label style="flex:1">Number <input id="f-num" value="{{ card.collector_number or '' }}"></label>
+      </div>
+      {% else %}
+      {% set p = card.provider_data or {} %}
+      <label>Name <input id="f-name" value="{{ p.name or card.name or '' }}"></label>
+      <label>Domain <input id="f-domain" value="{{ p.domain or '' }}"></label>
+      <label>Card type <input id="f-cardtype" value="{{ p.cardType or '' }}"></label>
+      <div style="display:flex; gap:.7rem">
+        <label style="flex:1">Energy <input id="f-energy" value="{{ p.energyCost or '' }}"></label>
+        <label style="flex:1">Power <input id="f-power" value="{{ p.powerCost or '' }}"></label>
+        <label style="flex:1">Might <input id="f-might" value="{{ p.might or '' }}"></label>
+      </div>
+      <label>Description <textarea id="f-desc" rows="5">{{ p.description or '' }}</textarea></label>
+      <label>Flavor <textarea id="f-flavor" rows="2">{{ p.flavorText or '' }}</textarea></label>
+      <label>Rarity <input id="f-rarity" value="{{ p.rarity or '' }}"></label>
+      <div style="display:flex; gap:.7rem">
+        <label style="flex:1">Set <input id="f-set" value="{{ card.set_name or card.set or '' }}"></label>
+        <label style="flex:1">Code <input id="f-num" value="{{ card.collector_number or '' }}"></label>
+      </div>
+      {% endif %}
+
+      <label>Replace art
+        <input type="file" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
+      </label>
+      <div style="display:flex; gap:.6rem; flex-wrap:wrap">
+        <button type="button" id="btn-preview">Update preview</button>
+        <button type="button" id="btn-download" style="background:#3a3d46">Download PNG</button>
+      </div>
+      <span class="muted" id="editor-msg"></span>
+    </form>
+  </div>
+
+  <div class="panel" style="text-align:center">
+    <h2>Preview</h2>
+    <img id="preview" class="result" style="max-width:420px;width:100%"
+         src="/api/cards/{{ card.id }}/image?kind={% if game == 'mtg' %}art_crop{% else %}png{% endif %}"
+         alt="preview">
+    <p class="muted" style="margin-top:.6rem">Compose uses a blank frame + your art/text.
+      Optional custom blanks: <code>web/shared/compose/frames/</code></p>
+  </div>
+</div>
+
+<script>
+const GAME = {{ game | tojson }};
+const BASE_CARD = {{ card | tojson }};
+
+function buildCard() {
+  const c = JSON.parse(JSON.stringify(BASE_CARD));
+  if (GAME === 'mtg') {
+    c.name = document.getElementById('f-name').value;
+    c.mana_cost = document.getElementById('f-mana').value;
+    c.type_line = document.getElementById('f-type').value;
+    c.oracle_text = document.getElementById('f-oracle').value;
+    const pw = document.getElementById('f-power').value;
+    const th = document.getElementById('f-tough').value;
+    c.power = pw === '' ? null : pw;
+    c.toughness = th === '' ? null : th;
+    c.artist = document.getElementById('f-artist').value;
+    c.set = document.getElementById('f-set').value;
+    c.collector_number = document.getElementById('f-num').value;
+  } else if (GAME === 'pokemon') {
+    const p = Object.assign({}, c.provider_data || {});
+    p.name = document.getElementById('f-name').value;
+    c.name = p.name;
+    p.hp = document.getElementById('f-hp').value;
+    p.types = document.getElementById('f-types').value.split(',').map(s => s.trim()).filter(Boolean);
+    p.subtypes = document.getElementById('f-subtypes').value.split(',').map(s => s.trim()).filter(Boolean);
+    p.supertype = document.getElementById('f-supertype').value;
+    try { p.attacks = JSON.parse(document.getElementById('f-attacks').value || '[]'); } catch (e) {}
+    try { p.abilities = JSON.parse(document.getElementById('f-abilities').value || '[]'); } catch (e) {}
+    p.artist = document.getElementById('f-artist').value;
+    p.number = document.getElementById('f-num').value;
+    c.set = document.getElementById('f-set').value;
+    c.collector_number = p.number;
+    c.provider_data = p;
+  } else {
+    const p = Object.assign({}, c.provider_data || {});
+    p.name = document.getElementById('f-name').value;
+    c.name = p.name;
+    p.domain = document.getElementById('f-domain').value;
+    p.cardType = document.getElementById('f-cardtype').value;
+    p.energyCost = document.getElementById('f-energy').value;
+    p.powerCost = document.getElementById('f-power').value;
+    p.might = document.getElementById('f-might').value;
+    p.description = document.getElementById('f-desc').value;
+    p.flavorText = document.getElementById('f-flavor').value;
+    p.rarity = document.getElementById('f-rarity').value;
+    p.code = document.getElementById('f-num').value;
+    c.set_name = document.getElementById('f-set').value;
+    c.collector_number = p.code;
+    c.provider_data = p;
+  }
+  return c;
+}
+
+async function compose(download) {
+  const msg = document.getElementById('editor-msg');
+  msg.textContent = 'Composing…';
+  const fd = new FormData();
+  fd.append('game', GAME);
+  fd.append('card_json', JSON.stringify(buildCard()));
+  const art = document.getElementById('art-input').files[0];
+  if (art) fd.append('art', art);
+  try {
+    const res = await fetch('/api/compose', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      msg.textContent = 'Error: ' + (err.detail || res.status);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const img = document.getElementById('preview');
+    if (img._blobUrl) URL.revokeObjectURL(img._blobUrl);
+    img._blobUrl = url;
+    img.src = url;
+    msg.textContent = 'Updated.';
+    if (download) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (buildCard().name || 'card') + '.png';
+      a.click();
+    }
+  } catch (e) {
+    msg.textContent = 'Network error';
+  }
+}
+
+document.getElementById('btn-preview').addEventListener('click', () => compose(false));
+document.getElementById('btn-download').addEventListener('click', () => compose(true));
+// First compose with default art so preview matches editor immediately
+compose(false);
+</script>
+{% endif %}
+
+<p><a href="{% if card %}/card/{{ card.id }}{% else %}/search{% endif %}">&larr; Back</a></p>
+{% endblock %}

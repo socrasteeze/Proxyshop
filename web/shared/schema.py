@@ -24,6 +24,13 @@ class JobStatus(str, Enum):
     FAILED = 'failed'
 
 
+class RenderMode(str, Enum):
+    """How a job should be rendered."""
+    AUTO = 'auto'              # MTG→photoshop; pokemon/riftbound→compose
+    PHOTOSHOP = 'photoshop'    # Windows worker + PSD templates
+    COMPOSE = 'compose'        # NAS Pillow blank-frame compositor
+
+
 class JobSubmit(BaseModel):
     """Payload for submitting a render job (art file uploaded separately as multipart)."""
     card_name: str = Field(min_length=1, max_length=200)
@@ -32,6 +39,7 @@ class JobSubmit(BaseModel):
     template_name: Optional[str] = Field(default=None, max_length=100)
     lang: str = Field(default='en', max_length=5)
     game: str = Field(default='mtg', max_length=20)
+    render_mode: str = Field(default='auto', max_length=20)
 
 
 class Job(BaseModel):
@@ -44,6 +52,7 @@ class Job(BaseModel):
     template_name: Optional[str] = None
     lang: str = 'en'
     game: str = 'mtg'
+    render_mode: str = 'auto'
     card_json: Optional[str] = None      # Full card object, pre-resolved by server
     art_filename: Optional[str] = None
     result_filename: Optional[str] = None

@@ -81,17 +81,24 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   **Riftbound** ([apitcg.com](https://apitcg.com) — both require a free key in
   `PROXYSHOP_APITCG_KEY`). Everything found online is cached locally, so the
   browser works offline for anything you've seen before. Photoshop rendering
-  supports **MTG** and **Pokémon** (when Pokémon templates are installed on
-  the Windows worker); Union Arena and Riftbound remain search/image only.
+  supports **MTG** (and **Pokémon** when PSDs are installed on the Windows
+  worker). **Pokémon** and **Riftbound** also support **Compose** mode — a
+  pokecardmaker-style Pillow renderer that runs on the NAS with no Photoshop
+  (procedural frames, or drop blank PNGs into `web/shared/compose/frames/`).
+  Union Arena remains search/image only.
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
-  Pokémon jobs always require an art upload.
-- **Multi-game rendering**: jobs carry a `game` field (`mtg` or `pokemon`).
-  The Windows worker advertises which games it can render in its capabilities
-  handshake (`games: ["mtg"]` until Pokémon PSDs are installed under
-  `plugins/PokemonTCG/templates/`). Desktop GUI/CLI defaults to MTG; set
-  `PROXYSHOP_GAME=pokemon` (or `GAME: pokemon` in `env.yml`) for local
-  Pokémon batch renders.
+  Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when
+  no upload is provided. Photoshop Pokémon jobs still prefer an art upload.
+- **Dual-path rendering** (`render_mode`):
+  - `auto` — MTG → Photoshop worker; Pokémon/Riftbound → NAS compose
+  - `compose` — Pillow blank-frame compositor on the NAS for **MTG, Pokémon,
+    and Riftbound** (no Windows needed)
+  - `photoshop` — queue for the Windows worker + PSD templates
+  **Browser editor** (`/edit?card_id=…`): open any cached card from Search →
+  *Edit in browser*, change text/art, preview and download a composed PNG.
+  Optional blank PNGs go under `web/shared/compose/frames/` (see README there);
+  otherwise procedural tinted frames are generated.
 - **Print prep**: each saved deck has *Download images* — a ZIP of unique HQ
   scans plus a `decklist.txt` manifest, ready for
   [Proxxied](https://proxxied.com/) or any print-prep tool — and *PDF sheet*,

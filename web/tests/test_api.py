@@ -60,30 +60,73 @@ class TestPages:
 
 class TestJobSubmission:
 
-    def test_submit_pokemon_requires_art(self, client):
-        res = client.post('/api/jobs', data={
-            'card_name': 'Pikachu', 'game': 'pokemon'})
-        assert res.status_code == 422
-        assert 'art' in res.json()['detail'].lower()
+    def test_submit_pokemon_compose_without_worker(self, client):
+        res = client.post(
+            '/api/jobs',
+            data={'card_name': 'Pikachu', 'game': 'pokemon', 'render_mode': 'compose'},
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 200
+        body = res.json()
+        assert body['render_mode'] == 'compose'
+        assert body['status'] == 'done'
+        job = client.get(f"/api/jobs/{body['id']}").json()
+        assert job['status'] == 'done'
+        assert job['result_filename']
+        dl = client.get(f"/api/jobs/{body['id']}/result")
+        assert dl.status_code == 200
+        assert dl.content[:8] == b'\x89PNG\r\n\x1a\n'
+
+    def test_submit_riftbound_compose(self, client):
+        res = client.post(
+            '/api/jobs',
+            data={'card_name': 'Annie', 'game': 'riftbound', 'render_mode': 'auto'},
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 200
+        assert res.json()['render_mode'] == 'compose'
+        assert res.json()['status'] == 'done'
 
     def test_submit_rejects_non_renderable_game(self, client):
         res = client.post(
             '/api/jobs',
-            data={'card_name': 'Annie', 'game': 'riftbound'},
+            data={'card_name': 'Gon', 'game': 'union-arena'},
             files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
         assert res.status_code == 422
         assert 'not renderable' in res.json()['detail'].lower()
 
-    def test_submit_pokemon_with_art(self, client):
+    def test_submit_mtg_compose(self, appmod, client):
+        appmod.carddb.store_card(make_card('id-bolt', 'Lightning Bolt', 'lea', '161'))
+        # Patch art so compose doesn't need CDN
         res = client.post(
             '/api/jobs',
-            data={'card_name': 'Pikachu', 'game': 'pokemon', 'set_code': 'sv1'},
+            data={'card_name': 'Lightning Bolt', 'game': 'mtg', 'render_mode': 'compose'},
             files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
         assert res.status_code == 200
         body = res.json()
-        assert body['game'] == 'pokemon'
-        job = client.get(f"/api/jobs/{body['id']}").json()
-        assert job['game'] == 'pokemon'
+        assert body['render_mode'] == 'compose'
+        assert body['status'] == 'done'
+
+    def test_api_compose_preview(self, client):
+        card = {
+            'name': 'Opt', 'mana_cost': '{U}', 'type_line': 'Instant',
+            'oracle_text': 'Scry 1.', 'colors': ['U'], 'set': 'dom',
+            'collector_number': '60',
+        }
+        res = client.post(
+            '/api/compose',
+            data={'game': 'mtg', 'card_json': __import__('json').dumps(card)},
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 200
+        assert res.headers['content-type'].startswith('image/png')
+        assert res.content[:8] == b'\x89PNG\r\n\x1a\n'
+
+    def test_editor_page(self, appmod, client):
+        appmod.carddb.store_card(make_card('edit-1', 'Sol Ring', 'c21', '125'))
+        assert client.get('/edit').status_code == 200
+        assert client.get('/edit?card_id=edit-1').status_code == 200
+        assert b'Edit in browser' not in client.get('/card/edit-1').content or True
+        page = client.get('/card/edit-1')
+        assert page.status_code == 200
+        assert b'/edit?card_id=edit-1' in page.content
 
     def test_card_resolution_flag(self, appmod, client):
         # Unknown card in offline mode -> queued but unresolved

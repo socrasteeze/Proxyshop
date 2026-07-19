@@ -9,6 +9,7 @@
   <p>
     <span class="status {{ job.status.value }}" data-field="status">{{ job.status.value }}</span>
     {% if job.game %}<span class="pill">{{ job.game }}</span>{% endif %}
+    {% if job.render_mode %}<span class="pill">{{ job.render_mode }}</span>{% endif %}
     <span class="pill">{{ job.template_name or 'Default template' }}</span>
     <span class="pill">attempt {{ job.attempts }}</span>
   </p>

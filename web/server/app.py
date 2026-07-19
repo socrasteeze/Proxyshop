@@ -36,10 +36,13 @@ from web.shared import games, images, sheets
 from web.shared.carddb import CardDB
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
-    Capabilities, DeckCardLine, DeckImportReport, JobResult, JobStatus)
+    Capabilities, DeckCardLine, DeckImportReport, JobResult, JobStatus, RenderMode)
+from web.shared.compose.engine import COMPOSE_GAMES, compose_card
 
-# Games the worker can render via Photoshop (others are search/image only)
-RENDERABLE_GAMES = frozenset({'mtg', 'pokemon'})
+# Games that can be rendered somehow (Photoshop and/or NAS compose)
+RENDERABLE_GAMES = frozenset({'mtg', 'pokemon', 'riftbound'})
+# Games that use the Windows worker + PSD path by default
+PHOTOSHOP_GAMES = frozenset({'mtg'})
 
 """
 * Configuration
@@ -214,6 +217,7 @@ def page_index(request: Request):
         'stats': carddb.stats(),
         'games': games.GAME_LABELS,
         'renderable_games': sorted(RENDERABLE_GAMES),
+        'compose_games': sorted(COMPOSE_GAMES),
     })
 
 
@@ -290,29 +294,54 @@ async def api_submit_job(
     template_name: Optional[str] = Form(default=None, max_length=100),
     lang: str = Form(default='en', max_length=5),
     game: str = Form(default='mtg', max_length=20),
+    render_mode: str = Form(default='auto', max_length=20),
     art: Optional[UploadFile] = File(default=None),
     idempotency_key: Optional[str] = Form(default=None, max_length=100),
 ):
-    """Submit a render job. Art upload is optional for MTG — without one, the
-    high-quality Scryfall art crop is fetched and used instead. Pokémon requires
-    an art upload (no art-crop equivalent)."""
+    """Submit a render job.
+
+    render_mode:
+      - auto: MTG → Photoshop worker; pokemon/riftbound → NAS compose
+      - compose: Pillow blank-frame compositor on the NAS (MTG/Pokémon/Riftbound)
+      - photoshop: queue for the Windows worker (requires templates)
+
+    Art upload is optional for MTG (Scryfall art crop) and for compose-mode
+    cards (HQ scan / art crop used as art). Photoshop Pokémon still prefers an
+    explicit art upload.
+    """
     rate_limit(request, 'submit')
 
     game = (game or 'mtg').strip().lower()
+    mode = (render_mode or 'auto').strip().lower()
+    if mode not in {m.value for m in RenderMode}:
+        raise HTTPException(status_code=422, detail=f'Unknown render_mode {mode!r}')
     if game not in RENDERABLE_GAMES:
         raise HTTPException(
             status_code=422,
             detail=f'Game {game!r} is not renderable — supported: '
                    + ', '.join(sorted(RENDERABLE_GAMES)))
 
-    # Reject if no worker advertises this game
-    caps = _capabilities()
-    if caps and caps.games and game not in caps.games:
+    # Resolve effective mode. Auto keeps MTG on Photoshop; others prefer compose.
+    if mode == 'auto':
+        effective = 'compose' if game in ('pokemon', 'riftbound') else 'photoshop'
+    else:
+        effective = mode
+    if effective == 'compose' and game not in COMPOSE_GAMES:
         raise HTTPException(
             status_code=422,
-            detail=f'No worker currently supports rendering {game!r} '
-                   f'(worker games: {", ".join(caps.games)}). '
-                   f'Install Pokémon templates on the Windows worker if needed.')
+            detail=f'Compose mode only supports: {", ".join(sorted(COMPOSE_GAMES))}')
+    if effective == 'photoshop' and game != 'mtg':
+        # Non-MTG Photoshop only when a worker advertises the game; else compose
+        caps = _capabilities()
+        if not (caps and caps.games and game in caps.games):
+            if game in COMPOSE_GAMES:
+                effective = 'compose'
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f'No worker supports Photoshop rendering for {game!r}.')
+    elif effective == 'photoshop' and game == 'mtg':
+        pass  # always queueable for MTG
 
     has_upload = art is not None and (art.filename or '') != ''
     if has_upload:
@@ -322,28 +351,44 @@ async def api_submit_job(
                 status_code=422,
                 detail=f'Unsupported art file type {suffix!r}')
 
-    # Resolve card data server-side so the worker can skip live lookups
     card = _resolve_card(card_name.strip(), set_code, collector_number, lang, game=game)
     card_json = json.dumps(card, separators=(',', ':')) if card else None
 
-    # Without an upload we must have card data + a fetchable art crop (MTG only)
     art_source: Optional[Path] = None
     if not has_upload:
-        if game != 'mtg':
+        if game == 'mtg':
+            if not card:
+                raise HTTPException(
+                    status_code=422,
+                    detail='Card not found — upload an art file, or check the '
+                           'name/set spelling so Scryfall art can be used.')
+            kind = 'art_crop' if effective == 'photoshop' else 'art_crop'
+            art_source = images.ensure_image(
+                carddb.session, card, kind, IMAGES_DIR, offline=OFFLINE)
+            if not art_source and effective == 'compose':
+                art_source = images.ensure_image(
+                    carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE)
+            if not art_source:
+                raise HTTPException(
+                    status_code=422,
+                    detail='No Scryfall art available for this card — upload an art file.')
+        elif effective == 'compose':
+            # Use cached HQ scan as the art layer when no upload
+            if not card:
+                raise HTTPException(
+                    status_code=422,
+                    detail='Card not found — search first or upload art.')
+            art_source = images.ensure_image(
+                carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE)
+            if not art_source:
+                raise HTTPException(
+                    status_code=422,
+                    detail='No card image available — upload an art file.')
+        else:
             raise HTTPException(
                 status_code=422,
-                detail=f'{games.GAME_LABELS.get(game, game)} jobs require an art upload.')
-        if not card:
-            raise HTTPException(
-                status_code=422,
-                detail='Card not found — upload an art file, or check the '
-                       'name/set spelling so Scryfall art can be used.')
-        art_source = images.ensure_image(
-            carddb.session, card, 'art_crop', IMAGES_DIR, offline=OFFLINE)
-        if not art_source:
-            raise HTTPException(
-                status_code=422,
-                detail='No Scryfall art available for this card — upload an art file.')
+                detail=f'{games.GAME_LABELS.get(game, game)} Photoshop jobs '
+                       'require an art upload.')
 
     job = store.submit(
         card_name=card_name.strip(),
@@ -352,10 +397,11 @@ async def api_submit_job(
         template_name=(template_name or None),
         lang=lang,
         game=game,
+        render_mode=effective,
         card_json=card_json,
         idempotency_key=(idempotency_key or None))
 
-    # If idempotent-replay returned an existing job, don't overwrite its art
+    # Persist art next to the job
     if has_upload:
         art_name = f'art{suffix}'
         art_path = _job_dir(job.id) / art_name
@@ -369,7 +415,135 @@ async def api_submit_job(
             art_path.write_bytes(art_source.read_bytes())
             store.set_art(job.id, art_name)
 
-    return {'id': job.id, 'status': job.status, 'card_resolved': card is not None, 'game': game}
+    # Compose path: render on the NAS immediately (no Windows worker)
+    if effective == 'compose':
+        return _run_compose_job(job.id)
+
+    return {
+        'id': job.id, 'status': job.status, 'card_resolved': card is not None,
+        'game': game, 'render_mode': effective,
+    }
+
+
+def _run_compose_job(job_id: str) -> dict:
+    """Execute a compose render synchronously and mark the job done/failed."""
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job not found')
+    if job.status == JobStatus.DONE and job.result_filename:
+        return {
+            'id': job_id, 'status': job.status, 'card_resolved': bool(job.card_json),
+            'game': job.game, 'render_mode': 'compose',
+        }
+    store.set_status(job_id, JobStatus.RENDERING)
+    log: list[str] = [f'compose game={job.game}']
+    try:
+        card = json.loads(job.card_json) if job.card_json else {
+            'name': job.card_name,
+            'set': job.set_code or '',
+            'collector_number': job.collector_number or '',
+        }
+        art_path = None
+        if job.art_filename:
+            art_path = _job_dir(job_id) / job.art_filename
+        result_name = 'result.png'
+        result_path = _job_dir(job_id) / result_name
+        compose_card(job.game, card, art_path=art_path, out_path=result_path)
+        log.append(f'wrote {result_name}')
+        store.finish(job_id, ok=True, result_filename=result_name, log='\n'.join(log))
+        done = store.get(job_id)
+        return {
+            'id': job_id,
+            'status': done.status if done else JobStatus.DONE,
+            'card_resolved': bool(job.card_json),
+            'game': job.game,
+            'render_mode': 'compose',
+        }
+    except Exception as e:
+        log.append(f'error: {e}')
+        # Force permanent failure (compose is sync — no worker retry)
+        con = store._conn()
+        from web.server.db import MAX_ATTEMPTS
+        con.execute('UPDATE jobs SET attempts=? WHERE id=?', (MAX_ATTEMPTS, job_id))
+        con.commit()
+        store.finish(job_id, ok=False, error=str(e), log='\n'.join(log))
+        raise HTTPException(status_code=500, detail=f'Compose failed: {e}') from e
+
+
+@app.post('/api/compose')
+async def api_compose(
+    request: Request,
+    game: str = Form(default='mtg', max_length=20),
+    card_json: str = Form(min_length=2, max_length=200_000),
+    art: Optional[UploadFile] = File(default=None),
+):
+    """Compose a card preview/download from edited fields (browser editor).
+
+    Accepts a Scryfall-/provider-shaped JSON object plus optional art.
+    Returns a PNG. Does not create a job.
+    """
+    rate_limit(request, 'submit')
+    game = (game or 'mtg').strip().lower()
+    if game not in COMPOSE_GAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Compose only supports: {", ".join(sorted(COMPOSE_GAMES))}')
+    try:
+        card = json.loads(card_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail=f'Invalid card_json: {e}') from e
+    if not isinstance(card, dict):
+        raise HTTPException(status_code=422, detail='card_json must be an object')
+
+    art_path: Optional[Path] = None
+    tmp_dir = DATA_DIR / 'compose-tmp'
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_art = None
+    if art is not None and (art.filename or '') != '':
+        suffix = Path(art.filename or 'art.png').suffix.lower()
+        if suffix not in ALLOWED_ART_TYPES:
+            raise HTTPException(status_code=422, detail=f'Unsupported art type {suffix!r}')
+        tmp_art = tmp_dir / f'{uuid_module.uuid4().hex}{suffix}'
+        await _save_upload(art, tmp_art)
+        art_path = tmp_art
+    else:
+        # Prefer cached art crop (MTG) or HQ scan
+        card_id = card.get('id')
+        cached = carddb.get_by_id(card_id) if card_id else None
+        src = cached or card
+        kind = 'art_crop' if game == 'mtg' else 'png'
+        art_path = images.ensure_image(
+            carddb.session, src, kind, IMAGES_DIR, offline=OFFLINE)
+        if not art_path and game == 'mtg':
+            art_path = images.ensure_image(
+                carddb.session, src, 'png', IMAGES_DIR, offline=OFFLINE)
+
+    out = tmp_dir / f'{uuid_module.uuid4().hex}.png'
+    try:
+        compose_card(game, card, art_path=art_path, out_path=out)
+        safe = re.sub(r'[^-\w. \[\]{}()]', '_', f"{card.get('name', 'card')}.png")
+        return FileResponse(out, media_type='image/png', filename=safe)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f'Compose failed: {e}') from e
+
+
+@app.get('/edit', response_class=HTMLResponse)
+def page_edit(request: Request, card_id: str = ''):
+    """Browser card editor — load a cached card, edit fields/art, compose PNG."""
+    card = carddb.get_by_id(card_id) if card_id else None
+    game = (card or {}).get('game', 'mtg') if card else 'mtg'
+    if card and game not in COMPOSE_GAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Editor only supports {", ".join(sorted(COMPOSE_GAMES))}')
+    return templates.TemplateResponse(request, 'editor.html', {
+        'card': card,
+        'card_id': card_id,
+        'game': game,
+        'game_label': games.GAME_LABELS.get(game, game),
+        'games': games.GAME_LABELS,
+        'compose_games': sorted(COMPOSE_GAMES),
+    })
 
 
 @app.get('/api/jobs')

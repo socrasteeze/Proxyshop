@@ -12,6 +12,13 @@
           {% endfor %}
         </select>
       </label>
+      <label>Render mode
+        <select name="render_mode" id="mode-select">
+          <option value="auto">Auto (MTG→Photoshop, others→Compose)</option>
+          <option value="compose">Compose (NAS — MTG / Pokémon / Riftbound)</option>
+          <option value="photoshop">Photoshop (Windows worker)</option>
+        </select>
+      </label>
       <label>Card name
         <input name="card_name" required maxlength="200" placeholder="Lightning Bolt"
                autocomplete="off" list="card-names" id="card-name-input">
@@ -25,7 +32,7 @@
           <input name="collector_number" maxlength="10" placeholder="42">
         </label>
       </div>
-      <label>Template
+      <label>Template <span class="muted">(Photoshop only)</span>
         <select name="template_name">
           <option value="">Default</option>
           {% if caps %}
@@ -43,12 +50,13 @@
         <input type="file" name="art" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
       </label>
       <input type="hidden" name="idempotency_key" value="">
-      <button type="submit">Queue render</button>
+      <button type="submit">Render</button>
       <span class="muted" data-field="message"></span>
     </form>
+    <p class="muted">Compose mode runs on the NAS (Pokémon / Riftbound) like pokecardmaker —
+      blank frame + art + text. Photoshop mode needs the Windows worker.</p>
     {% if not caps %}
-    <p class="muted">No worker has connected yet — template list will appear once your
-      Windows render worker performs its first handshake.</p>
+    <p class="muted">No worker has connected yet — Photoshop template list appears after handshake.</p>
     {% endif %}
   </div>
 
@@ -74,14 +82,14 @@
 <div class="panel">
   <h2>Recent jobs</h2>
   <table>
-    <thead><tr><th>Card</th><th>Template</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <thead><tr><th>Card</th><th>Mode</th><th>Status</th><th>Created</th><th></th></tr></thead>
     <tbody>
       {% for job in jobs %}
       <tr>
         <td><a href="/jobs/{{ job.id }}">{{ job.card_name }}</a>
           {% if job.game and job.game != 'mtg' %}<span class="pill">{{ job.game }}</span>{% endif %}
           {% if job.set_code %}<span class="muted">[{{ job.set_code|upper }}]</span>{% endif %}</td>
-        <td>{{ job.template_name or 'Default' }}</td>
+        <td>{{ job.render_mode or 'auto' }}{% if job.template_name %} · {{ job.template_name }}{% endif %}</td>
         <td><span class="status {{ job.status.value }}">{{ job.status.value }}</span></td>
         <td class="muted">{{ job.created_at }}</td>
         <td>{% if job.result_filename %}<a href="/api/jobs/{{ job.id }}/result">Download</a>{% endif %}</td>
@@ -99,19 +107,27 @@ document.addEventListener('DOMContentLoaded', () => {
     location.href = `/jobs/${data.id}`;
   });
   const gameSelect = document.getElementById('game-select');
+  const modeSelect = document.getElementById('mode-select');
   const artHint = document.getElementById('art-hint');
   const artInput = document.getElementById('art-input');
+  const composeGames = new Set({{ compose_games | tojson }});
   function syncGameUI() {
     const g = gameSelect.value;
-    if (g === 'mtg') {
+    const mode = modeSelect.value;
+    const isCompose = mode === 'compose' || (mode === 'auto' && composeGames.has(g));
+    if (g === 'mtg' && !isCompose) {
       artHint.textContent = '(optional for MTG — leave empty to use Scryfall art)';
       artInput.required = false;
+    } else if (isCompose) {
+      artHint.textContent = '(optional — uses HQ card scan if empty)';
+      artInput.required = false;
     } else {
-      artHint.textContent = '(required for Pokémon)';
+      artHint.textContent = '(required for Photoshop non-MTG)';
       artInput.required = true;
     }
   }
   gameSelect.addEventListener('change', syncGameUI);
+  modeSelect.addEventListener('change', syncGameUI);
   syncGameUI();
   wireCardAutocomplete(
     document.getElementById('card-name-input'),
