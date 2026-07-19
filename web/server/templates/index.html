@@ -48,23 +48,57 @@
   <p class="muted">Or browse <a href="/search">Card Search</a> and click <strong>Make / edit</strong>.</p>
 </div>
 
-<div id="workspace" class="editor-layout" {% if not card %}hidden{% endif %}>
-  <div class="panel">
+<div id="workspace" class="make-workspace" {% if not card %}hidden{% endif %}>
+  {# Preview first in DOM so it stacks above the form on narrow screens #}
+  <aside class="panel make-preview">
+    <h2>Preview</h2>
+    <div class="preview-frame">
+      <img id="preview" class="result preview-img"
+           {% if card %}
+           src="/api/cards/{{ card.id }}/image?kind={% if game == 'mtg' %}art_crop{% else %}png{% endif %}"
+           {% endif %}
+           alt="{% if card %}{{ card.name }} preview{% else %}Card preview{% endif %}">
+      <div id="preview-placeholder" class="preview-placeholder" {% if card %}hidden{% endif %}>
+        Select a card to preview
+      </div>
+    </div>
+    <div class="btn-row preview-actions">
+      <button type="button" id="btn-preview">Update preview</button>
+      <button type="button" id="btn-download" class="btn-ghost">Download PNG</button>
+      <button type="button" id="btn-queue" class="btn-ghost">Queue render</button>
+    </div>
+    <span class="muted" id="editor-msg"></span>
+    <p class="muted preview-hint">Compose = blank frame + your art/text on the NAS.</p>
+  </aside>
+
+  <section class="panel make-form">
     <h2>Edit{% if card %} · {{ game_label }}{% endif %}</h2>
     <form class="stack wide" id="editor-form">
       <input type="hidden" id="card-id" value="{{ card.id if card else '' }}">
       <input type="hidden" id="base-game" value="{{ game }}">
 
-      <div id="fields-mtg" class="actions-col" {% if game != 'mtg' %}hidden{% endif %}>
+      <div class="art-block">
+        <p class="group-title">Art</p>
+        <label class="art-drop">
+          <span class="art-drop-label">Upload custom art</span>
+          <span class="muted">PNG, JPG, WebP, TIFF — replaces the art window</span>
+          <input type="file" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
+        </label>
+      </div>
+
+      <div id="fields-mtg" class="field-block" {% if game != 'mtg' %}hidden{% endif %}>
+        <p class="group-title">Basics</p>
         <label>Name <input id="mtg-name" value="{{ card.name if card and game == 'mtg' else '' }}"></label>
-        <label>Mana cost <input id="mtg-mana" value="{{ card.mana_cost if card and game == 'mtg' else '' }}" placeholder="{R}"></label>
-        <label>Type line <input id="mtg-type" value="{{ card.type_line if card and game == 'mtg' else '' }}"></label>
-        <label>Oracle text <textarea id="mtg-oracle" class="plain" rows="5">{{ card.oracle_text if card and game == 'mtg' else '' }}</textarea></label>
         <div class="field-row">
+          <label>Mana cost <input id="mtg-mana" value="{{ card.mana_cost if card and game == 'mtg' else '' }}" placeholder="{R}"></label>
+          <label>Type line <input id="mtg-type" value="{{ card.type_line if card and game == 'mtg' else '' }}"></label>
+        </div>
+        <label>Oracle text <textarea id="mtg-oracle" class="plain" rows="4">{{ card.oracle_text if card and game == 'mtg' else '' }}</textarea></label>
+        <div class="field-row field-row--3">
           <label>Power <input id="mtg-power" value="{{ card.power if card and game == 'mtg' and card.power is not none else '' }}"></label>
           <label>Toughness <input id="mtg-tough" value="{{ card.toughness if card and game == 'mtg' and card.toughness is not none else '' }}"></label>
+          <label>Artist <input id="mtg-artist" value="{{ card.artist if card and game == 'mtg' else '' }}"></label>
         </div>
-        <label>Artist <input id="mtg-artist" value="{{ card.artist if card and game == 'mtg' else '' }}"></label>
         <div class="field-row">
           <label>Set <input id="mtg-set" value="{{ card.set if card and game == 'mtg' else '' }}"></label>
           <label>Number <input id="mtg-num" value="{{ card.collector_number if card and game == 'mtg' else '' }}"></label>
@@ -72,16 +106,15 @@
       </div>
 
       {% set p = (card.provider_data if card else {}) or {} %}
-      <div id="fields-pokemon" class="actions-col" {% if game != 'pokemon' %}hidden{% endif %}>
+      <div id="fields-pokemon" class="field-block" {% if game != 'pokemon' %}hidden{% endif %}>
+        <p class="group-title">Basics</p>
         <label>Name <input id="pkm-name" value="{% if card and game == 'pokemon' %}{{ p.name or card.name or '' }}{% endif %}"></label>
-        <div class="field-row">
+        <div class="field-row field-row--3">
           <label>HP <input id="pkm-hp" value="{{ p.hp if game == 'pokemon' else '' }}"></label>
           <label>Type <input id="pkm-types" value="{{ (p.types or [])|join(', ') if game == 'pokemon' else '' }}" placeholder="Fire"></label>
-        </div>
-        <div class="field-row">
           <label>Stage <input id="pkm-subtypes" value="{{ (p.subtypes or [])|join(', ') if game == 'pokemon' else '' }}" placeholder="Basic"></label>
-          <label>Supertype <input id="pkm-supertype" value="{{ p.supertype if game == 'pokemon' else 'Pokémon' }}"></label>
         </div>
+        <label>Supertype <input id="pkm-supertype" value="{{ p.supertype if game == 'pokemon' else 'Pokémon' }}"></label>
         <p class="group-title">Ability</p>
         {% set ab0 = (p.abilities or [{}])[0] if game == 'pokemon' else {} %}
         <label>Name <input id="pkm-ab-name" value="{{ ab0.name if ab0 else '' }}"></label>
@@ -90,86 +123,72 @@
         {% set at0 = (p.attacks or [{}])[0] if game == 'pokemon' else {} %}
         <div class="field-row">
           <label>Name <input id="pkm-atk0-name" value="{{ at0.name if at0 else '' }}"></label>
-          <label>Damage <input id="pkm-atk0-dmg" value="{{ at0.damage if at0 else '' }}"></label>
+          <label class="field-narrow">Damage <input id="pkm-atk0-dmg" value="{{ at0.damage if at0 else '' }}"></label>
         </div>
         <label>Text <textarea id="pkm-atk0-text" class="plain" rows="2">{{ at0.text if at0 else '' }}</textarea></label>
         <p class="group-title">Attack 2</p>
         {% set at1 = (p.attacks[1] if game == 'pokemon' and p.attacks and p.attacks|length > 1 else {}) %}
         <div class="field-row">
           <label>Name <input id="pkm-atk1-name" value="{{ at1.name if at1 else '' }}"></label>
-          <label>Damage <input id="pkm-atk1-dmg" value="{{ at1.damage if at1 else '' }}"></label>
+          <label class="field-narrow">Damage <input id="pkm-atk1-dmg" value="{{ at1.damage if at1 else '' }}"></label>
         </div>
         <label>Text <textarea id="pkm-atk1-text" class="plain" rows="2">{{ at1.text if at1 else '' }}</textarea></label>
-        <label>Artist <input id="pkm-artist" value="{{ p.artist if game == 'pokemon' else '' }}"></label>
-        <div class="field-row">
+        <div class="field-row field-row--3">
+          <label>Artist <input id="pkm-artist" value="{{ p.artist if game == 'pokemon' else '' }}"></label>
           <label>Set <input id="pkm-set" value="{{ card.set if card and game == 'pokemon' else '' }}"></label>
           <label>Number <input id="pkm-num" value="{{ card.collector_number if card and game == 'pokemon' else '' }}"></label>
         </div>
       </div>
 
-      <div id="fields-riftbound" class="actions-col" {% if game != 'riftbound' %}hidden{% endif %}>
+      <div id="fields-riftbound" class="field-block" {% if game != 'riftbound' %}hidden{% endif %}>
+        <p class="group-title">Basics</p>
         <label>Name <input id="rb-name" value="{% if card and game == 'riftbound' %}{{ p.name or card.name or '' }}{% endif %}"></label>
-        <label>Domain <input id="rb-domain" value="{{ p.domain if game == 'riftbound' else '' }}"></label>
-        <label>Card type <input id="rb-cardtype" value="{{ p.cardType if game == 'riftbound' else '' }}"></label>
         <div class="field-row">
+          <label>Domain <input id="rb-domain" value="{{ p.domain if game == 'riftbound' else '' }}"></label>
+          <label>Card type <input id="rb-cardtype" value="{{ p.cardType if game == 'riftbound' else '' }}"></label>
+        </div>
+        <div class="field-row field-row--3">
           <label>Energy <input id="rb-energy" value="{{ p.energyCost if game == 'riftbound' else '' }}"></label>
           <label>Power <input id="rb-power" value="{{ p.powerCost if game == 'riftbound' else '' }}"></label>
           <label>Might <input id="rb-might" value="{{ p.might if game == 'riftbound' else '' }}"></label>
         </div>
-        <label>Description <textarea id="rb-desc" class="plain" rows="4">{{ p.description if game == 'riftbound' else '' }}</textarea></label>
+        <label>Description <textarea id="rb-desc" class="plain" rows="3">{{ p.description if game == 'riftbound' else '' }}</textarea></label>
         <label>Flavor <textarea id="rb-flavor" class="plain" rows="2">{{ p.flavorText if game == 'riftbound' else '' }}</textarea></label>
-        <label>Rarity <input id="rb-rarity" value="{{ p.rarity if game == 'riftbound' else '' }}"></label>
-        <div class="field-row">
+        <div class="field-row field-row--3">
+          <label>Rarity <input id="rb-rarity" value="{{ p.rarity if game == 'riftbound' else '' }}"></label>
           <label>Set <input id="rb-set" value="{{ (card.set_name or card.set) if card and game == 'riftbound' else '' }}"></label>
           <label>Code <input id="rb-num" value="{{ card.collector_number if card and game == 'riftbound' else '' }}"></label>
         </div>
       </div>
 
-      <label>Replace art
-        <input type="file" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
-      </label>
-      <label>Render mode
-        <select id="mode-select">
-          <option value="auto">Auto (MTG→Photoshop, others→Compose)</option>
-          <option value="compose" selected>Compose (NAS preview / download)</option>
-          <option value="photoshop">Photoshop (Windows worker)</option>
-        </select>
-      </label>
-      <label id="template-wrap">Photoshop template
-        <select id="template-name">
-          <option value="">Default</option>
-          {% if caps %}
-            {% for cls, tmpls in caps.templates.items() %}
-              {% for t in tmpls %}
-                {% if t.installed %}
-                <option value="{{ t.name }}">{{ t.name }} ({{ cls }})</option>
-                {% endif %}
-              {% endfor %}
-            {% endfor %}
-          {% endif %}
-        </select>
-      </label>
-
-      <div class="btn-row">
-        <button type="button" id="btn-preview">Update preview</button>
-        <button type="button" id="btn-download" class="btn-ghost">Download PNG</button>
-        <button type="button" id="btn-queue" class="btn-ghost">Queue render</button>
-      </div>
-      <span class="muted" id="editor-msg"></span>
+      <details class="advanced-block">
+        <summary>Render options</summary>
+        <div class="field-block">
+          <label>Render mode
+            <select id="mode-select">
+              <option value="auto">Auto (MTG→Photoshop, others→Compose)</option>
+              <option value="compose" selected>Compose (NAS preview / download)</option>
+              <option value="photoshop">Photoshop (Windows worker)</option>
+            </select>
+          </label>
+          <label id="template-wrap">Photoshop template
+            <select id="template-name">
+              <option value="">Default</option>
+              {% if caps %}
+                {% for cls, tmpls in caps.templates.items() %}
+                  {% for t in tmpls %}
+                    {% if t.installed %}
+                    <option value="{{ t.name }}">{{ t.name }} ({{ cls }})</option>
+                    {% endif %}
+                  {% endfor %}
+                {% endfor %}
+              {% endif %}
+            </select>
+          </label>
+        </div>
+      </details>
     </form>
-  </div>
-
-  <div class="panel preview-panel preview-sticky">
-    <h2>Preview</h2>
-    <img id="preview" class="result" style="max-width:420px;width:100%"
-         {% if card %}
-         src="/api/cards/{{ card.id }}/image?kind={% if game == 'mtg' %}art_crop{% else %}png{% endif %}"
-         {% else %}
-         src=""
-         {% endif %}
-         alt="preview">
-    <p class="muted" style="margin-top:.6rem">Compose uses a blank frame + your art/text.</p>
-  </div>
+  </section>
 </div>
 
 <div class="panel">
@@ -212,10 +231,16 @@ const els = {
   chip: document.getElementById('selected-chip'),
   msg: document.getElementById('editor-msg'),
   preview: document.getElementById('preview'),
+  placeholder: document.getElementById('preview-placeholder'),
   art: document.getElementById('art-input'),
   mode: document.getElementById('mode-select'),
   cardId: document.getElementById('card-id'),
 };
+
+function setPreviewSrc(url) {
+  els.preview.src = url;
+  if (els.placeholder) els.placeholder.hidden = true;
+}
 
 function showGameFields(game) {
   document.getElementById('fields-mtg').hidden = game !== 'mtg';
@@ -285,7 +310,7 @@ function fillFromCard(card) {
   els.workspace.hidden = false;
 
   const kind = GAME === 'mtg' ? 'art_crop' : 'png';
-  els.preview.src = `/api/cards/${encodeURIComponent(card.id)}/image?kind=${kind}`;
+  setPreviewSrc(`/api/cards/${encodeURIComponent(card.id)}/image?kind=${kind}`);
   history.replaceState(null, '', `/?card_id=${encodeURIComponent(card.id)}`);
   scheduleCompose();
 }
@@ -380,7 +405,7 @@ async function compose(download) {
     const url = URL.createObjectURL(blob);
     if (els.preview._blobUrl) URL.revokeObjectURL(els.preview._blobUrl);
     els.preview._blobUrl = url;
-    els.preview.src = url;
+    setPreviewSrc(url);
     els.msg.textContent = 'Updated.';
     if (download) {
       const a = document.createElement('a');
