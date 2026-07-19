@@ -17,8 +17,15 @@
   <p style="color: var(--err)" data-field="error">{{ job.error or '' }}</p>
 
   {% if job.status.value == 'done' and job.result_filename %}
-    <p><a href="/api/jobs/{{ job.id }}/result"><button>Download render</button></a></p>
+    <p class="btn-row">
+      <a href="/api/jobs/{{ job.id }}/result"><button>Download render</button></a>
+      <button type="button" class="btn-danger" data-delete-job="{{ job.id }}" data-redirect="home">Delete</button>
+    </p>
     <img class="result" src="/api/jobs/{{ job.id }}/result" alt="Rendered card">
+  {% else %}
+    <p class="btn-row">
+      <button type="button" class="btn-danger" data-delete-job="{{ job.id }}" data-redirect="home">Delete</button>
+    </p>
   {% endif %}
 
   {% if job.log %}
@@ -29,7 +36,7 @@
   {% endif %}
 </div>
 
-<p><a href="/">&larr; Back to queue</a></p>
+<p><a href="/">&larr; Back to Make</a></p>
 
 {% if job.status.value not in ('done', 'failed') %}
 <script>

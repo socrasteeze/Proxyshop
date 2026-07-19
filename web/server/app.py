@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 import uuid as uuid_module
 import zipfile
@@ -208,8 +209,13 @@ def _capabilities() -> Optional[Capabilities]:
 
 
 @app.get('/', response_class=HTMLResponse)
-def page_index(request: Request):
+def page_index(request: Request, card_id: str = ''):
     caps = _capabilities()
+    card = carddb.get_by_id(card_id) if card_id else None
+    game = (card or {}).get('game', 'mtg') if card else 'mtg'
+    if card and game not in COMPOSE_GAMES and game not in RENDERABLE_GAMES:
+        card = None
+        game = 'mtg'
     return templates.TemplateResponse(request, 'index.html', {
         'jobs': store.list_jobs(30),
         'workers': store.get_workers(),
@@ -218,6 +224,10 @@ def page_index(request: Request):
         'games': games.GAME_LABELS,
         'renderable_games': sorted(RENDERABLE_GAMES),
         'compose_games': sorted(COMPOSE_GAMES),
+        'card': card,
+        'card_id': card_id if card else '',
+        'game': game,
+        'game_label': games.GAME_LABELS.get(game, game),
     })
 
 
@@ -527,23 +537,12 @@ async def api_compose(
         raise HTTPException(status_code=500, detail=f'Compose failed: {e}') from e
 
 
-@app.get('/edit', response_class=HTMLResponse)
-def page_edit(request: Request, card_id: str = ''):
-    """Browser card editor — load a cached card, edit fields/art, compose PNG."""
-    card = carddb.get_by_id(card_id) if card_id else None
-    game = (card or {}).get('game', 'mtg') if card else 'mtg'
-    if card and game not in COMPOSE_GAMES:
-        raise HTTPException(
-            status_code=422,
-            detail=f'Editor only supports {", ".join(sorted(COMPOSE_GAMES))}')
-    return templates.TemplateResponse(request, 'editor.html', {
-        'card': card,
-        'card_id': card_id,
-        'game': game,
-        'game_label': games.GAME_LABELS.get(game, game),
-        'games': games.GAME_LABELS,
-        'compose_games': sorted(COMPOSE_GAMES),
-    })
+@app.get('/edit')
+def page_edit(card_id: str = ''):
+    """Legacy editor URL — redirected into the Make workspace."""
+    if card_id:
+        return RedirectResponse(url=f'/?card_id={card_id}', status_code=302)
+    return RedirectResponse(url='/', status_code=302)
 
 
 @app.get('/api/jobs')
@@ -559,6 +558,20 @@ def api_get_job(request: Request, job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail='Job not found')
     return job.model_dump()
+
+
+@app.delete('/api/jobs/{job_id}')
+def api_delete_job(request: Request, job_id: str):
+    """Delete a job row and its on-disk art/result files."""
+    rate_limit(request, 'api')
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail='Job not found')
+    store.delete(job_id)
+    job_dir = JOBS_DIR / job_id
+    if job_dir.is_dir():
+        shutil.rmtree(job_dir, ignore_errors=True)
+    return {'ok': True, 'id': job_id}
 
 
 @app.get('/api/jobs/{job_id}/result')
@@ -605,6 +618,9 @@ def api_card_search(request: Request, q: str, limit: int = 30, game: str = 'mtg'
                 'set_name': c.get('set_name'),
                 'collector_number': c.get('collector_number'),
                 'released_at': c.get('released_at'),
+                'game': c.get('game') or game,
+                'thumb': (
+                    f"/api/cards/{c['id']}/image?kind=large" if c.get('id') else None),
                 'usd': (prices.get(c.get('id')) or {}).get('usd'),
                 'eur': (prices.get(c.get('id')) or {}).get('eur'),
             }

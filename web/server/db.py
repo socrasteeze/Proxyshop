@@ -276,3 +276,10 @@ class JobStore:
         rows = self._conn().execute(
             'SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?', (int(limit),)).fetchall()
         return [self._to_job(r) for r in rows]
+
+    def delete(self, job_id: str) -> bool:
+        """Remove a job row. Returns True if a row was deleted."""
+        con = self._conn()
+        cur = con.execute('DELETE FROM jobs WHERE id=?', (job_id,))
+        con.commit()
+        return cur.rowcount > 0

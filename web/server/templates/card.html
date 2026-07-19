@@ -25,19 +25,18 @@
         {% endif %}
       </tbody>
     </table>
-    <p style="margin-top:1rem">
+    <p style="margin-top:1rem" class="btn-row">
       {% if game in ('mtg', 'pokemon', 'riftbound') %}
-      <a href="/edit?card_id={{ card.id }}"><button>Edit in browser</button></a>
+      <a href="/?card_id={{ card.id }}"><button>Make / edit</button></a>
       {% endif %}
-      <a href="/api/cards/{{ card.id }}/image?kind=png" download><button style="background:#3a3d46">Download HQ scan</button></a>
+      <a href="/api/cards/{{ card.id }}/image?kind=png" download><button class="btn-ghost">Download HQ scan</button></a>
       {% if has_art_crop %}
       <a href="/api/cards/{{ card.id }}/image?kind=art_crop" download>
-        <button style="background:#3a3d46">Download art crop</button></a>
+        <button class="btn-ghost">Download art crop</button></a>
       {% endif %}
     </p>
     {% if game in ('mtg', 'pokemon', 'riftbound') %}
-    <p class="muted">Browser editor uses NAS compose (swap art, edit text, download PNG).
-      For print-quality MTG frames, queue a Photoshop render from the <a href="/">Render page</a>.</p>
+    <p class="muted">Open in Make to swap art, edit text, preview Compose, or queue Photoshop.</p>
     {% endif %}
   </div>
 </div>

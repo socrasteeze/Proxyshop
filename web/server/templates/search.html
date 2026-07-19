@@ -3,18 +3,26 @@
 {% block content %}
 
 <div class="panel">
-  <h2>Search cards &amp; pull high-quality images</h2>
+  <h2>Search cards</h2>
   <p class="muted">{{ '{:,}'.format(stats.cards) }} cards cached
     {% if stats.bulk_imported_at %} · MTG bulk import {{ stats.bulk_imported_at }}{% endif %}
     · results found online are cached automatically</p>
-  <form action="/search" method="get" style="display:flex; gap:.7rem; max-width:600px">
-    <select name="game" style="width:12rem">
-      {% for g, label in games.items() %}
-      <option value="{{ g }}" {% if g == game %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <input name="q" value="{{ q }}" placeholder="Card name…" style="flex:1" minlength="2">
-    <button type="submit">Search</button>
+  <div class="picker-row">
+    <label>Game
+      <select name="game" id="search-game">
+        {% for g, label in games.items() %}
+        <option value="{{ g }}" {% if g == game %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Card name
+      <input id="search-q" name="q" value="{{ q }}" placeholder="Start typing…" autocomplete="off" minlength="2">
+    </label>
+  </div>
+  <p class="muted" style="margin-top:.7rem">Typeahead jumps to the card page. Or press Enter to browse a grid.</p>
+  <form id="search-form" action="/search" method="get" hidden>
+    <input type="hidden" name="game" id="search-form-game" value="{{ game }}">
+    <input type="hidden" name="q" id="search-form-q" value="{{ q }}">
   </form>
 </div>
 
@@ -48,4 +56,25 @@
   {% endif %}
 </div>
 {% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const game = document.getElementById('search-game');
+  const q = document.getElementById('search-q');
+  wireCardTypeahead(q, {
+    getGame: () => game.value,
+    onSelect: (card) => { location.href = `/card/${encodeURIComponent(card.id)}`; },
+  });
+  q.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    // Allow Enter to submit grid search when dropdown is closed
+    const drop = q.closest('.typeahead')?.querySelector('.typeahead-drop');
+    if (drop && !drop.hidden) return;
+    ev.preventDefault();
+    document.getElementById('search-form-game').value = game.value;
+    document.getElementById('search-form-q').value = q.value.trim();
+    document.getElementById('search-form').submit();
+  });
+});
+</script>
 {% endblock %}

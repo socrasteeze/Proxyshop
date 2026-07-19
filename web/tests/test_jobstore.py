@@ -120,3 +120,13 @@ class TestWorkers:
         assert {w['name'] for w in workers} == {'w1', 'w2'}
         assert all(w['online'] for w in workers)
         assert jobstore.get_capabilities() == '{"templates": {}}'
+
+
+class TestDelete:
+
+    def test_delete_removes_row(self, jobstore):
+        job = jobstore.submit(card_name='Gone')
+        assert jobstore.delete(job.id) is True
+        assert jobstore.get(job.id) is None
+        assert jobstore.delete(job.id) is False
+        assert jobstore.list_jobs() == []

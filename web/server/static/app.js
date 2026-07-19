@@ -1,4 +1,12 @@
-/* Minimal helpers: form-to-fetch submission + status polling. No dependencies. */
+/* Shared UI helpers: typeahead, forms, job poll/delete. No dependencies. */
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 /* Poll an element's data-poll-url every data-poll-ms, swap JSON into renderer fn. */
 function pollJob(jobId, el) {
@@ -31,7 +39,7 @@ function wireAsyncForm(form, onSuccess) {
     ev.preventDefault();
     const btn = form.querySelector('button[type="submit"]');
     const msg = form.querySelector('[data-field="message"]');
-    btn.disabled = true;
+    if (btn) btn.disabled = true;
     if (msg) { msg.textContent = 'Working…'; }
     try {
       const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });
@@ -48,36 +56,176 @@ function wireAsyncForm(form, onSuccess) {
     } catch (e) {
       if (msg) msg.textContent = 'Network error, try again.';
     } finally {
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
     }
   });
 }
 
-/* Card-name autocomplete: debounced fetch into a <datalist>. Searches the
-   local card DB first, falling back to live provider (cached server-side).
-   getGame is an optional () => gameSlug used for multi-game search. */
-function wireCardAutocomplete(input, datalist, getGame) {
-  if (!input || !datalist) return;
+/**
+ * Thumbnail typeahead for card printings.
+ * opts: { getGame, onSelect, minChars=2, limit=12, navigateOnSelect=false }
+ * onSelect(card) receives {id,name,set,set_name,collector_number,thumb,game,...}
+ */
+function wireCardTypeahead(input, opts = {}) {
+  if (!input) return;
+  const getGame = opts.getGame || (() => 'mtg');
+  const onSelect = opts.onSelect || (() => {});
+  const minChars = opts.minChars ?? 2;
+  const limit = opts.limit ?? 12;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'typeahead';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const drop = document.createElement('div');
+  drop.className = 'typeahead-drop';
+  drop.hidden = true;
+  wrap.appendChild(drop);
+
   let timer = null;
   let lastKey = '';
+  let items = [];
+  let active = -1;
+  let abort = null;
+
+  function close() {
+    drop.hidden = true;
+    drop.innerHTML = '';
+    items = [];
+    active = -1;
+  }
+
+  function setActive(i) {
+    active = i;
+    drop.querySelectorAll('.typeahead-item').forEach((el, idx) => {
+      el.classList.toggle('is-active', idx === active);
+      if (idx === active) el.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  function select(card) {
+    close();
+    input.value = card.name || '';
+    onSelect(card);
+  }
+
+  function render(cards) {
+    items = cards;
+    active = cards.length ? 0 : -1;
+    if (!cards.length) {
+      drop.innerHTML = '<div class="typeahead-empty muted">No matches</div>';
+      drop.hidden = false;
+      return;
+    }
+    drop.innerHTML = cards.map((c, i) => {
+      const set = (c.set || '').toUpperCase();
+      const num = c.collector_number || '';
+      const meta = [set, num ? `#${num}` : ''].filter(Boolean).join(' ');
+      const thumb = c.thumb
+        ? `<img class="typeahead-thumb" src="${escapeHtml(c.thumb)}" alt="" loading="lazy">`
+        : '<div class="typeahead-thumb typeahead-thumb--empty"></div>';
+      return `<button type="button" class="typeahead-item${i === 0 ? ' is-active' : ''}" data-i="${i}">
+        ${thumb}
+        <span class="typeahead-meta">
+          <span class="typeahead-name">${escapeHtml(c.name || '')}</span>
+          <span class="muted">${escapeHtml(meta)}</span>
+        </span>
+      </button>`;
+    }).join('');
+    drop.hidden = false;
+    drop.querySelectorAll('.typeahead-item').forEach(btn => {
+      btn.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        select(items[Number(btn.dataset.i)]);
+      });
+    });
+  }
+
   input.addEventListener('input', () => {
     const q = input.value.trim();
-    const game = (typeof getGame === 'function' ? getGame() : 'mtg') || 'mtg';
+    const game = getGame() || 'mtg';
     const key = `${game}:${q}`;
     clearTimeout(timer);
-    if (q.length < 3 || key === lastKey) return;
+    if (q.length < minChars) {
+      lastKey = '';
+      close();
+      return;
+    }
+    if (key === lastKey) return;
     timer = setTimeout(async () => {
       lastKey = key;
+      if (abort) abort.abort();
+      abort = new AbortController();
       try {
         const res = await fetch(
-          `/api/cards/search?q=${encodeURIComponent(q)}&limit=12&game=${encodeURIComponent(game)}`);
+          `/api/cards/search?q=${encodeURIComponent(q)}&limit=${limit}&game=${encodeURIComponent(game)}`,
+          { signal: abort.signal });
         if (!res.ok) return;
         const data = await res.json();
-        const names = [...new Set(data.cards.map(c => c.name))];
-        datalist.innerHTML = names.map(n =>
-          `<option value="${n.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></option>`).join('');
-      } catch (e) { /* autocomplete is best-effort */ }
-    }, 300);
+        if (input.value.trim() !== q) return;
+        render(data.cards || []);
+      } catch (e) {
+        if (e.name !== 'AbortError') { /* best-effort */ }
+      }
+    }, 220);
+  });
+
+  input.addEventListener('keydown', (ev) => {
+    if (drop.hidden || !items.length) {
+      if (ev.key === 'Escape') close();
+      return;
+    }
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      setActive(Math.min(active + 1, items.length - 1));
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      setActive(Math.max(active - 1, 0));
+    } else if (ev.key === 'Enter' && active >= 0) {
+      ev.preventDefault();
+      select(items[active]);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      close();
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(close, 120);
+  });
+}
+
+/** Delete a job; returns true on success. Optionally remove a DOM row. */
+async function deleteJob(jobId, rowEl) {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `HTTP ${res.status}`);
+  }
+  if (rowEl) {
+    rowEl.classList.add('is-removing');
+    setTimeout(() => rowEl.remove(), 220);
+  }
+  return true;
+}
+
+function wireJobDeleteButtons(root = document) {
+  root.querySelectorAll('[data-delete-job]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-delete-job');
+      if (!id) return;
+      if (!confirm('Delete this render job?')) return;
+      const row = btn.closest('tr') || btn.closest('[data-job-row]');
+      btn.disabled = true;
+      try {
+        await deleteJob(id, row);
+        if (btn.dataset.redirect === 'home') location.href = '/';
+      } catch (e) {
+        alert(e.message || 'Delete failed');
+        btn.disabled = false;
+      }
+    });
   });
 }
 
@@ -86,4 +234,5 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('input[name="idempotency_key"]').forEach(inp => {
     if (!inp.value) inp.value = crypto.randomUUID();
   });
+  wireJobDeleteButtons();
 });

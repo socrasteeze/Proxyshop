@@ -121,12 +121,40 @@ class TestJobSubmission:
 
     def test_editor_page(self, appmod, client):
         appmod.carddb.store_card(make_card('edit-1', 'Sol Ring', 'c21', '125'))
-        assert client.get('/edit').status_code == 200
-        assert client.get('/edit?card_id=edit-1').status_code == 200
-        assert b'Edit in browser' not in client.get('/card/edit-1').content or True
+        # Legacy /edit redirects into Make workspace
+        bare = client.get('/edit', follow_redirects=False)
+        assert bare.status_code in (302, 307)
+        assert bare.headers['location'] == '/'
+        with_id = client.get('/edit?card_id=edit-1', follow_redirects=False)
+        assert with_id.status_code in (302, 307)
+        assert 'card_id=edit-1' in with_id.headers['location']
+        home = client.get('/?card_id=edit-1')
+        assert home.status_code == 200
+        assert b'Sol Ring' in home.content
+        assert b'Make a card' in home.content
         page = client.get('/card/edit-1')
         assert page.status_code == 200
-        assert b'/edit?card_id=edit-1' in page.content
+        assert b'/?card_id=edit-1' in page.content
+        assert b'Make / edit' in page.content
+
+    def test_delete_job(self, client):
+        res = submit_job(client, name='Delete Me')
+        job_id = res.json()['id']
+        assert client.get(f'/api/jobs/{job_id}').status_code == 200
+        deleted = client.delete(f'/api/jobs/{job_id}')
+        assert deleted.status_code == 200
+        assert deleted.json()['ok'] is True
+        assert client.get(f'/api/jobs/{job_id}').status_code == 404
+        assert client.delete(f'/api/jobs/{job_id}').status_code == 404
+
+    def test_search_includes_thumb(self, appmod, client):
+        appmod.carddb.store_card(make_card('thumb-1', 'Lightning Bolt', 'lea', '161'))
+        body = client.get('/api/cards/search', params={'q': 'lightning', 'game': 'mtg'}).json()
+        assert body['cards']
+        card = body['cards'][0]
+        assert card['id'] == 'thumb-1'
+        assert card['thumb'] == '/api/cards/thumb-1/image?kind=large'
+        assert card['game'] == 'mtg'
 
     def test_card_resolution_flag(self, appmod, client):
         # Unknown card in offline mode -> queued but unresolved
