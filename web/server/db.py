@@ -77,8 +77,9 @@ class JobStore:
     def _conn(self) -> sqlite3.Connection:
         con = getattr(self._local, 'con', None)
         if con is None:
-            con = sqlite3.connect(self.path)
+            con = sqlite3.connect(self.path, timeout=30.0)
             con.row_factory = sqlite3.Row
+            con.execute('PRAGMA busy_timeout=30000')
             self._local.con = con
         return con
 

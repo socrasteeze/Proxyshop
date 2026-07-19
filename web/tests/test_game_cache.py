@@ -78,6 +78,37 @@ class TestListRiftboundPage:
         assert any(c.get('page') == 2 and int(c.get('size') or 0) == 2 for c in calls)
 
 
+class TestRiftboundBoundary:
+    """A partial final Riftcodex page must not stop the run before ARC cards."""
+
+    def test_crosses_riftcodex_arc_boundary(self, carddb, tmp_path, monkeypatch):
+        # Riftcodex total=3 (limit 2 → pages of 2 then 1), then 2 ARC cards.
+        def fake_list(offset=0, limit=50, hydrate=False):
+            total = 5  # 3 riftcodex + 2 arc
+            windows = {
+                0: [_rb_row(0), _rb_row(1)],
+                2: [_rb_row(2)],                 # partial page at the boundary
+                3: [_rb_row(90), _rb_row(91)],   # ARC region
+            }
+            rows = windows.get(offset, [])
+            cards = [games._normalize_riftcodex_card(r) for r in rows]
+            return [c for c in cards if c], total
+
+        monkeypatch.setattr(games, 'list_riftbound_page', fake_list)
+        monkeypatch.setattr(games, '_rb_localized_variant', lambda *a, **k: None)
+        monkeypatch.setattr(game_cache.images, 'ensure_image', lambda *a, **k: None)
+        monkeypatch.setattr(game_cache.images, 'cached_image_path', lambda *a, **k: None)
+
+        done = game_cache.run_cache_game(
+            db=carddb, game='riftbound',
+            images_dir=tmp_path / 'img', runs_dir=tmp_path / 'runs',
+            download_images=False, hydrate=False, page_size=2,
+            use_signals=False, print_fn=lambda *a, **k: None)
+        assert done.status == 'done'
+        # All 5 cards stored — the old short-page stop capped this at 3.
+        assert carddb.count_by_game('riftbound') == 5
+
+
 class TestCacheGameResume:
 
     def test_stop_and_resume(self, carddb, tmp_path, monkeypatch):
@@ -156,6 +187,29 @@ class TestCacheGameResume:
         )
         assert done.status == 'done'
         assert carddb.count_by_game('riftbound') == 3
+
+    def test_filter_conflict_detection(self, tmp_path):
+        runs = tmp_path / 'runs'
+        ck = game_cache.checkpoint_path(runs, 'pokemon')
+        # In-progress run with supertype:Trainer
+        game_cache.save_checkpoint(ck, game_cache.CacheProgress(
+            game='pokemon', status='stopped', stored=398,
+            filters={'supertype': 'Trainer'}, query='supertype:Trainer'))
+        # Same filters → no conflict (safe to resume)
+        assert game_cache.filter_conflict(
+            runs, 'pokemon', {'supertype': 'Trainer'}) is None
+        # Different filters on an in-progress run → conflict, returns old label
+        label = game_cache.filter_conflict(runs, 'pokemon', {'set': 'sv1'})
+        assert label and 'Trainer' in label
+
+    def test_no_conflict_when_finished(self, tmp_path):
+        runs = tmp_path / 'runs'
+        ck = game_cache.checkpoint_path(runs, 'pokemon')
+        game_cache.save_checkpoint(ck, game_cache.CacheProgress(
+            game='pokemon', status='done', stored=500,
+            filters={'supertype': 'Trainer'}))
+        # A completed run can be replaced silently — no conflict prompt
+        assert game_cache.filter_conflict(runs, 'pokemon', {'set': 'sv1'}) is None
 
     def test_status_reset_stop_helpers(self, tmp_path):
         runs = tmp_path / 'runs'

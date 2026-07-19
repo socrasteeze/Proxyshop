@@ -15,7 +15,21 @@ from typing import Optional
 from web.shared import games
 from web.shared.carddb import CardDB
 from web.shared.game_cache import (
-    checkpoint_path, load_checkpoint, progress_dict, request_stop, run_cache_game)
+    checkpoint_path, filter_conflict, load_checkpoint, progress_dict,
+    request_stop, run_cache_game)
+
+
+class FilterConflict(Exception):
+    """A saved run with different filters would be clobbered by a new start.
+
+    Carries the existing run's human label so the UI can offer to discard it.
+    """
+
+    def __init__(self, existing_label: str):
+        self.existing_label = existing_label
+        super().__init__(
+            f'A different download is already saved for this game '
+            f'({existing_label}).')
 
 _lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
@@ -128,6 +142,13 @@ def start(
                 f'{game} cache needs filters (set, type, rarity, art, …) '
                 'so it does not dump the entire catalog')
         build_provider_query(game, norm)
+
+    # Detect a filter mismatch up front so the UI can offer to discard the old
+    # run, instead of the background thread crashing with a CLI-flavored error.
+    if not fresh and not images_only:
+        existing = filter_conflict(runs_dir, game, filters)
+        if existing:
+            raise FilterConflict(existing)
 
     with _lock:
         if is_running(game):

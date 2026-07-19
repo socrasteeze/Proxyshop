@@ -17,7 +17,7 @@
       </select>
     </label>
     <label>Card name
-      <input id="search-q" name="q" value="{{ q }}" placeholder="Type a card name…" autocomplete="off" minlength="2">
+      <input id="search-q" name="q" value="{{ q }}" placeholder="Name, or keyword / t:creature o:draw supertype:trainer…" autocomplete="off" minlength="2" title="Plain text matches name, type, rules text and subtypes (e.g. 'supporter'). Field syntax: t: type, o: rules text, r: rarity, set:, artist:, supertype:, subtype:">
     </label>
   </div>
   <p class="muted" style="margin-top:.7rem">Selecting a suggestion opens the card page. Press Enter to show all matching cards.</p>
@@ -154,7 +154,7 @@
   <details class="advanced-block cache-advanced">
     <summary>Advanced options</summary>
     <div class="btn-row">
-      <button type="button" class="btn-ghost" id="cache-fresh" hidden>Restart download (discard progress)</button>
+      <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start new download with these filters (discard saved)</button>
     </div>
     <p class="muted" style="margin-top:.5rem">Discards the current checkpoint and restarts with the filters above.</p>
   </details>
@@ -486,8 +486,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const res = await fetch(url, opts);
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.detail && body.detail.conflict) {
+      // A different filtered download is already saved for this game.
+      const name = labels[g] || g;
+      const existing = body.detail.existing_label || 'the previous filters';
+      if (confirm(
+        `${name} already has a saved download for "${existing}".\n\n`
+        + 'Start a NEW download with your current filters?\n'
+        + 'This discards the saved progress for the previous filters.'
+      )) {
+        return postCache('start', true);  // fresh=true → discard & restart
+      }
+      statusEl.textContent =
+        `Kept the saved “${existing}” download — use Resume to continue it.`;
+      return;
+    }
     if (!res.ok) {
-      statusEl.textContent = body.detail || `Request failed (${res.status})`;
+      const detail = body.detail;
+      statusEl.textContent =
+        (detail && (detail.message || (typeof detail === 'string' ? detail : null)))
+        || `Request failed (${res.status})`;
       return;
     }
     statusEl.textContent = formatStatus(body);

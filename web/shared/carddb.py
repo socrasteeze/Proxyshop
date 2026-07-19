@@ -25,6 +25,9 @@ from typing import Any, Iterable, Iterator, Optional, Union
 # Third Party Imports
 import requests
 
+# Local Imports
+from web.shared import cardquery
+
 """
 * Constants
 """
@@ -291,12 +294,18 @@ class CardDB:
         return self._session
 
     def _conn(self) -> sqlite3.Connection:
-        """Per-thread connection (SQLite objects can't cross threads)."""
+        """Per-thread connection (SQLite objects can't cross threads).
+
+        busy_timeout makes a blocked writer wait for the lock instead of
+        raising 'database is locked' immediately — essential because the
+        background cache thread and web-request threads write concurrently.
+        """
         con = getattr(self._local, 'con', None)
         if con is None:
-            con = sqlite3.connect(self.path)
+            con = sqlite3.connect(self.path, timeout=30.0)
             con.row_factory = sqlite3.Row
             con.execute('PRAGMA foreign_keys=ON')
+            con.execute('PRAGMA busy_timeout=30000')
             self._local.con = con
         return con
 
@@ -551,8 +560,16 @@ class CardDB:
             where.append('game=?')
             params.append(game)
         if q.strip():
-            where.append('name LIKE ? COLLATE NOCASE')
-            params.append(f'%{q.strip()}%')
+            # Game-scoped searches get full field/keyword syntax (t:, o:,
+            # supertype:, 'supporter', …); cross-game falls back to name.
+            if game:
+                parsed = cardquery.parse_query(q, game)
+                where_sql, where_params = cardquery.build_where(parsed, game)
+                where.append(f'({where_sql})')
+                params.extend(where_params)
+            else:
+                where.append('name LIKE ? COLLATE NOCASE')
+                params.append(f'%{q.strip()}%')
         if set_code.strip():
             where.append('set_code=?')
             params.append(set_code.strip().lower())
@@ -629,12 +646,14 @@ class CardDB:
         limit: int = 50,
         game: Optional[str] = 'mtg',
     ) -> list[dict]:
-        """Name search against the local DB only (no network).
+        """Search the local DB (no network) by name, keyword, or field syntax.
 
-        Exact-name matches rank first, then prefix matches, then substring /
-        word matches. Pass game=None (or '') to search across every game.
-        Returns one row per printing. MTG stays English-only; other games
-        include all stored langs (e.g. JA).
+        Plain text matches across the card's searchable fields for the game
+        (name, type, rules text, subtypes, …) so 'supporter' finds Pokémon
+        Trainer-Supporters. Scryfall-style tokens work too: 't:creature',
+        'o:draw', 'set:xyz', 'supertype:trainer', 'artist:"john avon"'.
+        Pass game=None to search across every game (name-only for sanity).
+        Exact/prefix name matches rank first. Returns one row per printing.
         """
         text = (text or '').strip()
         if not text:
@@ -650,19 +669,28 @@ class CardDB:
             if game == 'mtg':
                 scope.append("lang='en'")
         else:
-            # Cross-game: keep MTG English-only, other games any lang.
             scope.append("(game != 'mtg' OR lang='en')")
-        scope_clause = (' AND ' + ' AND '.join(scope)) if scope else ''
+        scope_clause = ' AND '.join(scope) if scope else '1=1'
 
-        rank = """
-            CASE
-                WHEN name = ? COLLATE NOCASE THEN 0
-                WHEN name LIKE ? COLLATE NOCASE THEN 1
-                ELSE 2
-            END
-        """
-        rank_params = [text, f'{text}%']
+        rank, rank_params = cardquery.name_rank_sql(text)
         order = f'{rank} ASC, name COLLATE NOCASE ASC, released_at DESC'
+
+        parsed = cardquery.parse_query(text, game or 'mtg')
+        # Cross-game or field-syntax queries take the structured path; a simple
+        # single-word name query keeps the fast FTS path below.
+        structured = bool(game) and (parsed.fields or len(parsed.terms) != 1)
+
+        if structured:
+            where_sql, where_params = cardquery.build_where(parsed, game or 'mtg')
+            rows = con.execute(
+                f"""
+                SELECT id, game, json FROM cards
+                WHERE {scope_clause} AND ({where_sql})
+                ORDER BY {order}
+                LIMIT ?
+                """,
+                (*scope_params, *where_params, *rank_params, limit)).fetchall()
+            return self._rows_to_cards(rows, text)
 
         results: list[dict] = []
         seen: set[str] = set()
@@ -677,7 +705,7 @@ class CardDB:
                         SELECT id, game, json FROM cards
                         WHERE rowid IN (
                             SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?
-                        ){scope_clause}
+                        ) AND {scope_clause}
                         ORDER BY {order}
                         LIMIT ?
                         """,
@@ -692,15 +720,16 @@ class CardDB:
         if len(results) >= limit:
             return results[:limit]
 
-        # Fallback / top-up: substring LIKE scan (covers mid-word matches).
+        # Fallback / top-up: blob LIKE scan (covers mid-word + field matches).
+        blob_sql, blob_params = cardquery.build_where(parsed, game or 'mtg')
         rows = con.execute(
             f"""
             SELECT id, game, json FROM cards
-            WHERE name LIKE ? COLLATE NOCASE{scope_clause}
+            WHERE {scope_clause} AND ({blob_sql})
             ORDER BY {order}
             LIMIT ?
             """,
-            (f'%{text}%', *scope_params, *rank_params, limit)).fetchall()
+            (*scope_params, *blob_params, *rank_params, limit)).fetchall()
         for r in rows:
             if r['id'] in seen:
                 continue
@@ -710,7 +739,6 @@ class CardDB:
             if len(results) >= limit:
                 break
 
-        # Merge FTS and LIKE hits into one consistent ranking.
         needle = text.lower()
 
         def sort_key(card: dict) -> tuple:
@@ -725,6 +753,19 @@ class CardDB:
 
         results.sort(key=sort_key)
         return results[:limit]
+
+    def _rows_to_cards(self, rows: list, text: str) -> list[dict]:
+        """Deserialize (id, game, json) rows into card dicts, dedup by id."""
+        out: list[dict] = []
+        seen: set[str] = set()
+        for r in rows:
+            if r['id'] in seen:
+                continue
+            seen.add(r['id'])
+            card = json.loads(r['json'])
+            card.setdefault('game', r['game'] or 'mtg')
+            out.append(card)
+        return out
 
     def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:
         """Name search against the live Scryfall API; results are cached.

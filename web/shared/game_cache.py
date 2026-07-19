@@ -118,6 +118,29 @@ def reset_checkpoint(runs_dir: Path, game: str) -> None:
     clear_stop(runs_dir, game)
 
 
+def filter_conflict(runs_dir: Path, game: str, filters: Optional[dict]) -> Optional[str]:
+    """Return the saved run's filter label if it conflicts with new filters.
+
+    A conflict means an in-progress (running/stopped, has stored cards or
+    advanced past page 1) checkpoint exists whose filters differ from the
+    requested ones — so resuming would mix two different downloads. Returns
+    None when there's no conflict (no checkpoint, same filters, or the saved
+    run is empty/finished and can be safely replaced).
+    """
+    game = (game or '').strip().lower()
+    progress = load_checkpoint(checkpoint_path(runs_dir, game))
+    if not progress:
+        return None
+    norm = normalize_filters(game, filters)
+    if filters_equal(progress.filters, norm):
+        return None
+    if progress.status in ('running', 'stopped') and (
+        progress.stored or progress.offset or progress.page > 1
+    ):
+        return describe_filters(game, progress.filters or {}, progress.query or '')
+    return None
+
+
 class _StopWatch:
     """Cooperative stop via stop-flag file, and optionally SIGINT/SIGTERM (CLI)."""
 
@@ -210,10 +233,12 @@ def _fetch_catalog_page(
             offset=progress.offset,
             limit=progress.page_size,
             hydrate=progress.hydrate)
+        # Continue while the running offset hasn't reached the combined total
+        # (Riftcodex + ARC). Do NOT stop on a short page: the last Riftcodex
+        # page is usually partial where it meets the ARC source, and stopping
+        # there is what capped the catalog (~950) before ARC cards were fetched.
         has_more = bool(cards) and (
             total is None or progress.offset + len(cards) < (total or 0))
-        if cards and len(cards) < progress.page_size:
-            has_more = False
         if not cards:
             has_more = False
         return cards, total, has_more
@@ -247,8 +272,11 @@ def _store_and_image(
     watch: Optional['_StopWatch'] = None,
     print_fn=print,
 ) -> None:
-    # commit=False: the catalog loop commits once per provider page instead
-    # of fsyncing the WAL for every card.
+    # Phase 1 — write all DB rows for this card, then commit immediately so
+    # the write lock is NOT held across the (slow, network-bound) image
+    # downloads below. Holding a transaction open across image fetches is what
+    # let a whole page block concurrent web writes into 'database is locked'.
+    to_image: list[dict] = [card]
     db.store_card(card, source='catalog', game=progress.game, commit=False)
     progress.stored += 1
     # Riftbound: also store official JA/KO name rows (same art URL, searchable)
@@ -266,38 +294,30 @@ def _store_and_image(
                 continue
             db.store_card(variant, source='catalog', game=progress.game, commit=False)
             progress.stored += 1
-            if progress.download_images:
-                existing_v = images.cached_image_path(
-                    images_dir, variant['id'], progress.image_kind)
-                if existing_v:
-                    progress.images_skip += 1
-                else:
-                    _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
-                    path_v = images.ensure_image(
-                        db.session, variant, progress.image_kind, images_dir,
-                        offline=False)
-                    if path_v:
-                        progress.images_ok += 1
-                    else:
-                        progress.images_fail += 1
+            to_image.append(variant)
+    db.commit()  # release the write lock before any network image fetch
+
     if not progress.download_images:
         _polite_sleep(CACHE_CARD_INTERVAL, watch)
         return
-    existing = images.cached_image_path(images_dir, card['id'], progress.image_kind)
-    if existing:
-        progress.images_skip += 1
-        _polite_sleep(CACHE_CARD_INTERVAL * 0.25, watch)
-        return
-    _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
-    path = images.ensure_image(
-        db.session, card, progress.image_kind, images_dir, offline=False)
-    if path:
-        progress.images_ok += 1
-    else:
-        progress.images_fail += 1
-        name = card.get('name') or card.get('id') or '?'
-        print_fn(f"!! image failed: {name} ({card.get('id')})")
-    _polite_sleep(CACHE_CARD_INTERVAL, watch)
+
+    # Phase 2 — download images (no open DB transaction)
+    for entry in to_image:
+        existing = images.cached_image_path(images_dir, entry['id'], progress.image_kind)
+        if existing:
+            progress.images_skip += 1
+            _polite_sleep(CACHE_CARD_INTERVAL * 0.25, watch)
+            continue
+        _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
+        path = images.ensure_image(
+            db.session, entry, progress.image_kind, images_dir, offline=False)
+        if path:
+            progress.images_ok += 1
+        else:
+            progress.images_fail += 1
+            name = entry.get('name') or entry.get('id') or '?'
+            print_fn(f"!! image failed: {name} ({entry.get('id')})")
+        _polite_sleep(CACHE_CARD_INTERVAL, watch)
 
 
 def run_cache_game(

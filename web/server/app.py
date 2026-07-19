@@ -1477,6 +1477,19 @@ async def api_cache_game_start(
             filters=filters,
             image_kind=kind,
         )
+    except cache_runner.FilterConflict as e:
+        # 409: a different saved run exists — UI offers "discard & start new"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'conflict': True,
+                'existing_label': e.existing_label,
+                'message': (
+                    f'This game already has a saved download for '
+                    f'“{e.existing_label}”. Start a new download with your '
+                    f'current filters (discards the saved progress), or '
+                    f'resume the existing one.'),
+            }) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
