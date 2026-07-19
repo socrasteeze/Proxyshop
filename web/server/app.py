@@ -16,6 +16,8 @@ import os
 import re
 import secrets
 import time
+import uuid as uuid_module
+import zipfile
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
@@ -30,6 +32,7 @@ from fastapi.templating import Jinja2Templates
 
 # Local Imports
 from web.server.db import JobStore
+from web.shared import images, sheets
 from web.shared.carddb import CardDB
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
@@ -45,6 +48,8 @@ OFFLINE = os.environ.get('PROXYSHOP_OFFLINE', '0') == '1'
 MAX_UPLOAD_BYTES = int(os.environ.get('PROXYSHOP_MAX_UPLOAD_MB', '50')) * 1024 * 1024
 
 JOBS_DIR = DATA_DIR / 'jobs'
+IMAGES_DIR = DATA_DIR / 'images'
+SHEETS_DIR = DATA_DIR / 'sheets'
 TEMPLATES_DIR = Path(__file__).parent / 'templates'
 STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -210,21 +215,39 @@ async def api_submit_job(
     collector_number: Optional[str] = Form(default=None, max_length=10),
     template_name: Optional[str] = Form(default=None, max_length=100),
     lang: str = Form(default='en', max_length=5),
-    art: UploadFile = File(...),
+    art: Optional[UploadFile] = File(default=None),
     idempotency_key: Optional[str] = Form(default=None, max_length=100),
 ):
-    """Submit a render job with an art upload."""
+    """Submit a render job. Art upload is optional — without one, the
+    high-quality Scryfall art crop is fetched and used instead."""
     rate_limit(request, 'submit')
 
-    suffix = Path(art.filename or 'art.png').suffix.lower()
-    if suffix not in ALLOWED_ART_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f'Unsupported art file type {suffix!r}')
+    has_upload = art is not None and (art.filename or '') != ''
+    if has_upload:
+        suffix = Path(art.filename or 'art.png').suffix.lower()
+        if suffix not in ALLOWED_ART_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f'Unsupported art file type {suffix!r}')
 
     # Resolve card data server-side so the worker can skip Scryfall entirely
     card = _resolve_card(card_name.strip(), set_code, collector_number, lang)
     card_json = json.dumps(card, separators=(',', ':')) if card else None
+
+    # Without an upload we must have card data + a fetchable art crop
+    art_source: Optional[Path] = None
+    if not has_upload:
+        if not card:
+            raise HTTPException(
+                status_code=422,
+                detail='Card not found — upload an art file, or check the '
+                       'name/set spelling so Scryfall art can be used.')
+        art_source = images.ensure_image(
+            carddb.session, card, 'art_crop', IMAGES_DIR, offline=OFFLINE)
+        if not art_source:
+            raise HTTPException(
+                status_code=422,
+                detail='No Scryfall art available for this card — upload an art file.')
 
     job = store.submit(
         card_name=card_name.strip(),
@@ -236,11 +259,18 @@ async def api_submit_job(
         idempotency_key=(idempotency_key or None))
 
     # If idempotent-replay returned an existing job, don't overwrite its art
-    art_name = f'art{suffix}'
-    art_path = _job_dir(job.id) / art_name
-    if not art_path.exists():
-        await _save_upload(art, art_path)
-        store.set_art(job.id, art_name)
+    if has_upload:
+        art_name = f'art{suffix}'
+        art_path = _job_dir(job.id) / art_name
+        if not art_path.exists():
+            await _save_upload(art, art_path)
+            store.set_art(job.id, art_name)
+    else:
+        art_name = f'art{art_source.suffix}'
+        art_path = _job_dir(job.id) / art_name
+        if not art_path.exists():
+            art_path.write_bytes(art_source.read_bytes())
+            store.set_art(job.id, art_name)
 
     return {'id': job.id, 'status': job.status, 'card_resolved': card is not None}
 
@@ -398,6 +428,152 @@ def api_deck(request: Request, deck_id: str):
     if not deck:
         raise HTTPException(status_code=404, detail='Deck not found')
     return deck
+
+
+@app.get('/api/decks/{deck_id}/images')
+def api_deck_images(request: Request, deck_id: str):
+    """Download a deck's high-quality card scans as a ZIP.
+
+    One 745x1040 PNG per unique card (named 'Name [SET] num.png') plus a
+    decklist.txt manifest with quantities — ready to drop into an external
+    print-prep tool like Proxxied, or any layout software.
+    """
+    rate_limit(request, 'import')
+    deck = carddb.get_deck(deck_id)
+    if not deck:
+        raise HTTPException(status_code=404, detail='Deck not found')
+
+    seen: set[str] = set()
+    manifest: list[str] = []
+    missing: list[str] = []
+    files: list[tuple[str, Path]] = []
+    for entry in deck['cards']:
+        card = carddb.get_by_id(entry['card_id']) if entry['card_id'] else None
+        path = images.ensure_image(
+            carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE) if card else None
+        if path and card['id'] not in seen:
+            seen.add(card['id'])
+            safe = re.sub(r'[^-\w. \[\]{}()\']', '_', (
+                f"{card.get('name', 'card')} "
+                f"[{(card.get('set') or '').upper()}] {card.get('collector_number', '')}"
+            ).strip())
+            files.append((f'{safe}.png', path))
+        if path:
+            manifest.append(f"{entry['qty']} {entry['card_name']}")
+        else:
+            missing.append(f"{entry['qty']} {entry['card_name']}")
+
+    if not files:
+        raise HTTPException(
+            status_code=422,
+            detail='No card images available'
+                   + (' (offline mode: only cached images can be used)' if OFFLINE else ''))
+
+    SHEETS_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = SHEETS_DIR / f'{deck_id}-images.zip'
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_STORED) as zf:
+        for arcname, path in files:
+            zf.write(path, arcname)
+        listing = '\n'.join(manifest)
+        if missing:
+            listing += '\n\n# Missing images (not cached / not found):\n' + '\n'.join(missing)
+        zf.writestr('decklist.txt', listing + '\n')
+    safe_deck = re.sub(r'[^-\w. ]', '_', deck['name'])[:60] or 'deck'
+    return FileResponse(
+        zip_path, filename=f'{safe_deck}-images.zip', media_type='application/zip')
+
+
+"""
+* Public API: Proxy Sheets
+"""
+
+
+@app.post('/api/sheets')
+def api_build_sheet(
+    request: Request,
+    deck_id: Optional[str] = Form(default=None, max_length=100),
+    text: Optional[str] = Form(default=None, max_length=100_000),
+    paper: str = Form(default='letter', max_length=10),
+):
+    """Compile a print-ready proxy sheet PDF from HQ card scans.
+
+    Source is a saved deck (deck_id) or pasted decklist text. Card images
+    are fetched from Scryfall once and cached; the PDF lays out 63x88mm
+    cards 3x3 per page at 300 DPI with cut guides.
+    """
+    rate_limit(request, 'import')
+    if paper not in sheets.PAPERS_MM:
+        raise HTTPException(status_code=422, detail=f'Unknown paper size {paper!r}')
+
+    # Collect (card_id or name, qty) entries
+    entries: list[tuple[Optional[str], str, int]] = []
+    if deck_id:
+        deck = carddb.get_deck(deck_id)
+        if not deck:
+            raise HTTPException(status_code=404, detail='Deck not found')
+        entries = [(c['card_id'], c['card_name'], c['qty'])
+                   for c in deck['cards'] if c['board'] in ('main', 'commander', 'side')]
+    elif text:
+        lines = parse_decklist_text(text)
+        if not lines:
+            raise HTTPException(status_code=422, detail='No card lines recognized')
+        result = carddb.resolve_collection([
+            {'set': ln.set_code.lower(), 'collector_number': ln.collector_number}
+            if ln.set_code and ln.collector_number else
+            {'name': ln.name, 'set': ln.set_code.lower()} if ln.set_code else
+            {'name': ln.name}
+            for ln in lines])
+        by_name = {c.get('name', '').lower(): c for c in result.found}
+        for c in result.found:
+            if ' // ' in c.get('name', ''):
+                by_name.setdefault(c['name'].split(' // ')[0].lower(), c)
+        for ln in lines:
+            card = by_name.get(ln.name.lower())
+            entries.append((card.get('id') if card else None, ln.name, ln.qty))
+    else:
+        raise HTTPException(status_code=422, detail='Provide deck_id or decklist text')
+
+    if sum(q for _, _, q in entries) > 500:
+        raise HTTPException(status_code=422, detail='Too many cards (limit 500)')
+
+    # Fetch HQ scans (745x1040 PNG), expand by quantity
+    image_paths: list[Path] = []
+    missing: list[str] = []
+    for card_id, name, qty in entries:
+        card = carddb.get_by_id(card_id) if card_id else None
+        path = images.ensure_image(
+            carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE) if card else None
+        if path:
+            image_paths.extend([path] * qty)
+        else:
+            missing.append(name)
+
+    if not image_paths:
+        raise HTTPException(
+            status_code=422,
+            detail='No card images available'
+                   + (' (offline mode: only cached images can be used)' if OFFLINE else ''))
+
+    sheet_id = str(uuid_module.uuid4())
+    out = SHEETS_DIR / f'{sheet_id}.pdf'
+    pages = sheets.build_sheet_pdf(image_paths, out, paper=paper)
+    return {
+        'id': sheet_id,
+        'pages': pages,
+        'cards': len(image_paths),
+        'missing': missing,
+        'url': f'/api/sheets/{sheet_id}',
+    }
+
+
+@app.get('/api/sheets/{sheet_id}')
+def api_get_sheet(sheet_id: str):
+    if not re.fullmatch(r'[0-9a-f-]{36}', sheet_id):
+        raise HTTPException(status_code=404, detail='Sheet not found')
+    path = SHEETS_DIR / f'{sheet_id}.pdf'
+    if not path.exists():
+        raise HTTPException(status_code=404, detail='Sheet not found')
+    return FileResponse(path, filename='proxy-sheet.pdf', media_type='application/pdf')
 
 
 """

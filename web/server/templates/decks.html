@@ -28,7 +28,7 @@
     <h2>Saved decks</h2>
     <p class="muted">{{ '{:,}'.format(stats.cards) }} cards in the local database.</p>
     <table>
-      <thead><tr><th>Name</th><th>Cards</th><th>Est. value</th><th>Imported</th></tr></thead>
+      <thead><tr><th>Name</th><th>Cards</th><th>Est. value</th><th>Imported</th><th></th></tr></thead>
       <tbody>
         {% for d in decks %}
         <tr>
@@ -36,17 +36,60 @@
           <td>{{ d.cards }}</td>
           <td>{% if d.value_usd %}${{ '%.2f'|format(d.value_usd) }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="muted">{{ d.created_at }}</td>
+          <td style="white-space:nowrap">
+            <button type="button" class="zip-btn" data-deck="{{ d.id }}">Download images</button>
+            <button type="button" class="sheet-btn" data-deck="{{ d.id }}"
+                    style="background:#3a3d46">PDF sheet</button>
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="muted">No decks imported yet.</td></tr>
+        <tr><td colspan="5" class="muted">No decks imported yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
+    <p class="muted" id="sheet-status"></p>
+    <p class="muted">“Download images” fetches high-quality card scans
+      (745×1040 PNG) as a ZIP with a decklist manifest — ready for
+      <a href="https://proxxied.com/" rel="noopener">Proxxied</a> or any
+      print-prep tool. “PDF sheet” is a built-in quick print layout
+      (63×88&nbsp;mm, 3×3 per page, 300&nbsp;DPI, cut guides). First run
+      downloads the images; later runs are instant.</p>
   </div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
+  const status = document.getElementById('sheet-status');
+  document.querySelectorAll('.zip-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      status.textContent = 'Preparing ZIP — first run downloads card images, hang tight…';
+      location.href = `/api/decks/${btn.dataset.deck}/images`;
+    });
+  });
+  document.querySelectorAll('.sheet-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      status.textContent = 'Compiling sheet — first run downloads card images, hang tight…';
+      try {
+        const body = new FormData();
+        body.append('deck_id', btn.dataset.deck);
+        const res = await fetch('/api/sheets', { method: 'POST', body });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = `Error: ${data.detail || res.status}`;
+          return;
+        }
+        status.textContent = `${data.pages} page(s), ${data.cards} cards`
+          + (data.missing.length ? ` — missing: ${data.missing.join(', ')}` : '');
+        location.href = data.url;
+      } catch (e) {
+        status.textContent = 'Network error, try again.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
   wireAsyncForm(document.getElementById('import-form'), (report) => {
     const el = document.getElementById('import-report');
     const bad = report.unresolved.map(u =>

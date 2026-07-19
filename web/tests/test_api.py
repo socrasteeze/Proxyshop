@@ -184,6 +184,110 @@ class TestWorkerLifecycle:
         assert client.get(f'/api/jobs/{job_id}').json()['status'] == 'queued'
 
 
+class FakeImageSession:
+    """Serves a small generated PNG for any image URL."""
+
+    def get(self, url, **kwargs):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new('RGB', (74, 104), (60, 60, 200)).save(buf, 'PNG')
+        payload = buf.getvalue()
+
+        class Res:
+            status_code = 200
+            def iter_content(self, chunk_size):
+                yield payload
+        return Res()
+
+
+def _card_with_images(card_id, name, set_code='sta', number='42'):
+    card = make_card(card_id, name, set_code, number)
+    card['image_uris'] = {
+        'png': f'https://cards.example/{card_id}.png',
+        'art_crop': f'https://cards.example/{card_id}-art.jpg'}
+    return card
+
+
+class TestArtlessSubmit:
+
+    def test_submit_without_art_uses_scryfall_art(self, appmod, client):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        appmod.carddb._session = FakeImageSession()
+        appmod.OFFLINE = False
+        res = client.post('/api/jobs', data={'card_name': 'Lightning Bolt'})
+        assert res.status_code == 200
+        job = client.get(f"/api/jobs/{res.json()['id']}").json()
+        assert job['art_filename'] == 'art.jpg'
+
+    def test_submit_without_art_unknown_card_422(self, client):
+        res = client.post('/api/jobs', data={'card_name': 'Not A Real Card'})
+        assert res.status_code == 422
+
+    def test_submit_without_art_no_image_offline_422(self, appmod, client):
+        # Card known but image not cached and offline -> reject with guidance
+        appmod.carddb.store_card(_card_with_images('id-2', 'Sol Ring'))
+        res = client.post('/api/jobs', data={'card_name': 'Sol Ring'})
+        assert res.status_code == 422
+        assert 'upload an art file' in res.json()['detail']
+
+
+class TestDeckImages:
+
+    def _deck_with_cards(self, appmod):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        appmod.carddb.store_card(_card_with_images('id-2', 'Sol Ring', 'c21', '125'))
+        return appmod.carddb.save_deck('Zip Deck', [
+            ('id-1', 'Lightning Bolt', 4, 'main'),
+            ('id-2', 'Sol Ring', 1, 'main'),
+            (None, 'Mystery Card', 1, 'main')])
+
+    def test_zip_contains_unique_images_and_manifest(self, appmod, client, tmp_path):
+        import io
+        import zipfile
+        deck_id = self._deck_with_cards(appmod)
+        appmod.carddb._session = FakeImageSession()
+        appmod.OFFLINE = False
+        res = client.get(f'/api/decks/{deck_id}/images')
+        assert res.status_code == 200
+        zf = zipfile.ZipFile(io.BytesIO(res.content))
+        names = set(zf.namelist())
+        assert 'decklist.txt' in names
+        assert any(n.startswith('Lightning Bolt [STA]') for n in names)
+        assert any(n.startswith('Sol Ring [C21]') for n in names)
+        listing = zf.read('decklist.txt').decode()
+        assert '4 Lightning Bolt' in listing
+        assert 'Mystery Card' in listing  # reported as missing
+
+    def test_zip_404_unknown_deck(self, client):
+        assert client.get('/api/decks/nope/images').status_code == 404
+
+
+class TestSheets:
+
+    def test_sheet_from_deck(self, appmod, client):
+        appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))
+        deck_id = appmod.carddb.save_deck(
+            'Sheet Deck', [('id-1', 'Lightning Bolt', 10, 'main')])
+        appmod.carddb._session = FakeImageSession()
+        appmod.OFFLINE = False
+        res = client.post('/api/sheets', data={'deck_id': deck_id})
+        assert res.status_code == 200
+        body = res.json()
+        assert body['cards'] == 10
+        assert body['pages'] == 2  # 9 per page
+        pdf = client.get(body['url'])
+        assert pdf.status_code == 200
+        assert pdf.content[:5] == b'%PDF-'
+
+    def test_sheet_requires_source(self, client):
+        assert client.post('/api/sheets', data={}).status_code == 422
+
+    def test_sheet_bad_paper_422(self, appmod, client):
+        res = client.post('/api/sheets', data={'deck_id': 'x', 'paper': 'legal'})
+        assert res.status_code == 422
+
+
 class TestDeckImport:
 
     def test_paste_import_offline(self, appmod, client):

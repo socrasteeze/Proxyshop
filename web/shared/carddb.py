@@ -398,6 +398,12 @@ class CardDB:
         self.store_card(card)
         return card
 
+    def get_by_id(self, card_id: str) -> Optional[dict]:
+        """Fetch a cached card object by its Scryfall id (local only)."""
+        row = self._conn().execute(
+            'SELECT json FROM cards WHERE id=?', (card_id,)).fetchone()
+        return json.loads(row['json']) if row else None
+
     def search_local(self, text: str, limit: int = 50) -> list[dict]:
         """Substring name search against the local DB only (no network).
 

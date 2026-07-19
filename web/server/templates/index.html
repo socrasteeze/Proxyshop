@@ -32,8 +32,8 @@
           {% endif %}
         </select>
       </label>
-      <label>Art file
-        <input type="file" name="art" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff" required>
+      <label>Art file <span class="muted">(optional — leave empty to use the card's Scryfall art)</span>
+        <input type="file" name="art" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
       </label>
       <input type="hidden" name="idempotency_key" value="">
       <button type="submit">Queue render</button>

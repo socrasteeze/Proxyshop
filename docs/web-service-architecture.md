@@ -69,6 +69,15 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   render form's autocomplete search the local DB first and fall back to a
   live Scryfall search when nothing matches — fallback results are cached,
   so the database grows with every search.
+- **High-quality images**: full-card scans (745×1040 PNG) and art crops are
+  fetched on demand and cached under `/data/images/` — each image downloads
+  exactly once.
+- **Art-less rendering**: submitting a render job without an art upload
+  automatically uses the card's Scryfall art crop as the render input.
+- **Print prep**: each saved deck has *Download images* — a ZIP of unique HQ
+  scans plus a `decklist.txt` manifest, ready for
+  [Proxxied](https://proxxied.com/) or any print-prep tool — and *PDF sheet*,
+  a built-in quick layout (63×88mm cards, 3×3 per page, 300 DPI, cut guides).
 - Scryfall etiquette is built in: identifying User-Agent, ≥100ms between
   requests, honoring `429 Retry-After`, bulk files preferred over API calls.
 - Set `PROXYSHOP_OFFLINE=1` to forbid all live Scryfall calls.
@@ -270,6 +279,9 @@ Interactive docs live at `/api/docs`. Key endpoints:
 | `/api/templates` | GET | — | Template options (from worker handshake) |
 | `/api/cards/search?q=` | GET | — | Local card DB search |
 | `/api/decks/import` | POST | — | Import decklist text or Moxfield/Archidekt URL |
+| `/api/decks/{id}/images` | GET | — | ZIP of HQ card scans + decklist manifest |
+| `/api/sheets` | POST | — | Compile proxy sheet PDF (deck_id or text, paper=letter/a4) |
+| `/api/sheets/{id}` | GET | — | Download compiled PDF |
 | `/api/worker/hello` | POST | Bearer | Capabilities handshake |
 | `/api/worker/jobs/next?wait=25` | GET | Bearer | Long-poll claim |
 | `/api/worker/jobs/{id}/art` | GET | Bearer | Download job art |
