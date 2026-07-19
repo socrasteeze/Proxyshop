@@ -17,7 +17,7 @@ set -eu
 
 # --- edit these per app ---
 REPO="socrasteeze/Proxyshop"                # GitHub owner/name (private OK)
-BRANCH="claude/template-creation-enhancements-ifj9ws"  # switch to main after merge
+BRANCH="main"                               # branch to deploy from
 APP_NAME="proxyshop-web"                    # container name + image tag
 APP_DIR="$HOME/proxyshop-web"               # where code lands on the NAS
 TOKEN_FILE="$HOME/.gh-token"                # PAT file, chmod 600 (shared across apps)

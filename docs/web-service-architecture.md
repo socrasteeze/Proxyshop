@@ -144,8 +144,8 @@ nas-refresh.bat
 ```
 
 Notes:
-- The script deploys from the branch named in its config block — currently
-  the feature branch; switch `BRANCH` to `main` once merged.
+- The script deploys from the branch named in its config block (`main` by
+  default).
 - TerraMaster mounts live under `/Volume1` (capital V), Synology under
   `/volume1` — the script defaults to TerraMaster; check with `df -h`.
 - `PermissionError` on `/data` means the container user doesn't match the
