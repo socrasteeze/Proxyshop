@@ -5,6 +5,13 @@
   <div class="panel">
     <h2>Render a card</h2>
     <form class="stack" id="submit-form" action="/api/jobs" method="post" enctype="multipart/form-data">
+      <label>Game
+        <select name="game" id="game-select">
+          {% for g in renderable_games %}
+          <option value="{{ g }}">{{ games.get(g, g) }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <label>Card name
         <input name="card_name" required maxlength="200" placeholder="Lightning Bolt"
                autocomplete="off" list="card-names" id="card-name-input">
@@ -32,8 +39,8 @@
           {% endif %}
         </select>
       </label>
-      <label>Art file <span class="muted">(optional — leave empty to use the card's Scryfall art)</span>
-        <input type="file" name="art" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
+      <label>Art file <span class="muted" id="art-hint">(optional for MTG — leave empty to use Scryfall art)</span>
+        <input type="file" name="art" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
       </label>
       <input type="hidden" name="idempotency_key" value="">
       <button type="submit">Queue render</button>
@@ -72,6 +79,7 @@
       {% for job in jobs %}
       <tr>
         <td><a href="/jobs/{{ job.id }}">{{ job.card_name }}</a>
+          {% if job.game and job.game != 'mtg' %}<span class="pill">{{ job.game }}</span>{% endif %}
           {% if job.set_code %}<span class="muted">[{{ job.set_code|upper }}]</span>{% endif %}</td>
         <td>{{ job.template_name or 'Default' }}</td>
         <td><span class="status {{ job.status.value }}">{{ job.status.value }}</span></td>
@@ -90,9 +98,25 @@ document.addEventListener('DOMContentLoaded', () => {
   wireAsyncForm(document.getElementById('submit-form'), (data) => {
     location.href = `/jobs/${data.id}`;
   });
+  const gameSelect = document.getElementById('game-select');
+  const artHint = document.getElementById('art-hint');
+  const artInput = document.getElementById('art-input');
+  function syncGameUI() {
+    const g = gameSelect.value;
+    if (g === 'mtg') {
+      artHint.textContent = '(optional for MTG — leave empty to use Scryfall art)';
+      artInput.required = false;
+    } else {
+      artHint.textContent = '(required for Pokémon)';
+      artInput.required = true;
+    }
+  }
+  gameSelect.addEventListener('change', syncGameUI);
+  syncGameUI();
   wireCardAutocomplete(
     document.getElementById('card-name-input'),
-    document.getElementById('card-names'));
+    document.getElementById('card-names'),
+    () => gameSelect.value);
 });
 </script>
 {% endblock %}

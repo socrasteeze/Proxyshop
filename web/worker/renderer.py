@@ -6,6 +6,7 @@
 * only run on Windows inside the Proxyshop checkout/venv.
 """
 # Standard Library Imports
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,9 @@ os.environ.setdefault('PROXYSHOP_NONINTERACTIVE', '1')
 
 # Proxyshop Imports (Windows-only chain: Photoshop COM, kivy-free headless console)
 from src import APP, CFG, CON, ENV, PATH, TEMPLATE_DEFAULTS, TEMPLATE_MAP
+from src.enums.mtg import LayoutType
 from src.enums.settings import OutputFileType
+from src.games.pokemon.layouts import assign_pokemon_layout
 from src.layouts import assign_layout
 
 # Local Imports
@@ -25,6 +28,23 @@ from web.shared.schema import Capabilities, Job, TemplateInfo
 """
 * Capabilities
 """
+
+POKEMON_LAYOUT_TYPES = (
+    LayoutType.Pokemon,
+    LayoutType.PokemonTrainer,
+    LayoutType.PokemonEnergy,
+)
+
+
+def _pokemon_templates_installed() -> bool:
+    """True when at least one Pokémon PSD is present on this worker."""
+    for category_map in TEMPLATE_MAP.values():
+        for layout_type in POKEMON_LAYOUT_TYPES:
+            by_name = category_map.get('map', {}).get(layout_type, {})
+            for details in by_name.values():
+                if details['object'].is_installed:
+                    return True
+    return False
 
 
 def get_capabilities(worker_name: str) -> Capabilities:
@@ -41,10 +61,14 @@ def get_capabilities(worker_name: str) -> Capabilities:
                     name=name,
                     class_name=details['class_name'],
                     installed=details['object'].is_installed))
+    games = ['mtg']
+    if _pokemon_templates_installed():
+        games.append('pokemon')
     return Capabilities(
         worker_name=worker_name,
         proxyshop_version=str(ENV.VERSION),
-        templates=templates)
+        templates=templates,
+        games=games)
 
 
 def _find_template(card_class: str, template_name: Optional[str]):
@@ -68,7 +92,7 @@ def render(job: Job, art_path: Path, out_dir: Path) -> tuple[bool, Optional[Path
     Args:
         job: The render job (card identity + template choice).
         art_path: Downloaded art file, named with Proxyshop filename tags
-            ("Name [SET] {num}.png") so `assign_layout` can parse it.
+            ("Name [SET] {num}.png") so layout assignment can parse it.
         out_dir: Ignored for the real renderer — Proxyshop writes to PATH.OUT;
             the deterministic name (job id) is what matters.
 
@@ -76,12 +100,30 @@ def render(job: Job, art_path: Path, out_dir: Path) -> tuple[bool, Optional[Path
         (ok, result_path, log, error)
     """
     log: list[str] = []
+    game = (job.game or 'mtg').lower()
 
-    # Resolve card data + layout via the standard pipeline
-    layout = assign_layout(art_path)
+    if game == 'pokemon':
+        if not _pokemon_templates_installed():
+            return False, None, '\n'.join(log), (
+                'Pokémon templates are not installed on this worker — place PSDs in '
+                'plugins/PokemonTCG/templates/ (see plugins/PokemonTCG/README.md).')
+        card_data = None
+        if job.card_json:
+            try:
+                card_data = json.loads(job.card_json)
+            except json.JSONDecodeError:
+                card_data = None
+        layout = assign_pokemon_layout(art_path, card_data=card_data)
+    elif game == 'mtg':
+        layout = assign_layout(art_path)
+    else:
+        return False, None, '\n'.join(log), (
+            f'Unsupported game {game!r} — this worker only renders mtg/pokemon.')
+
     if isinstance(layout, str):
-        # assign_layout returns an error string on failure
+        # assign_* returns an error string on failure
         return False, None, '\n'.join(log), layout
+    log.append(f'Game: {game}')
     log.append(f'Layout: {type(layout).__name__} ({layout.card_class})')
 
     # Resolve the template
@@ -92,7 +134,8 @@ def render(job: Job, art_path: Path, out_dir: Path) -> tuple[bool, Optional[Path
     if not template['object'].is_installed:
         return False, None, '\n'.join(log), (
             f"Template '{template['name']}' is not installed on this worker — "
-            f"open the Proxyshop GUI updater to download it.")
+            f"open the Proxyshop GUI updater to download it, or place the PSD "
+            f"under the plugin templates folder.")
     log.append(f"Template: {template['name']} ({template['class_name']})")
 
     # Load template config, then force job-appropriate overrides

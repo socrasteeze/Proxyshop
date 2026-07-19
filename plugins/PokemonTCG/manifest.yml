@@ -1,0 +1,42 @@
+###
+# * Plugin Details
+###
+
+PLUGIN:
+  name: 'PokemonTCG'
+  author: 'Proxyshop'
+  desc: "Pokémon TCG proxy templates (SV-era MVP: Pokémon, Trainer, Energy)."
+  license: 'MPL-2.0'
+  requires: '^1.13.0'
+  version: '0.1.0'
+
+###
+# * Templates
+# * Place PSD binaries in plugins/PokemonTCG/templates/ matching these names.
+# * Layer contract: src/enums/layers_pokemon.py
+# * No Google Drive IDs yet — supply PSDs locally (same as other gitignored templates).
+###
+
+pokemon-normal.psd:
+  name: 'Pokémon Normal'
+  desc: 'SV-era standard Pokémon creature frame.'
+  templates:
+    Pokémon Normal:
+      NormalPokemonTemplate:
+      - pokemon
+
+pokemon-trainer.psd:
+  name: 'Pokémon Trainer'
+  desc: 'SV-era Trainer card frame.'
+  templates:
+    Pokémon Trainer:
+      TrainerPokemonTemplate:
+      - pokemon_trainer
+
+pokemon-energy.psd:
+  name: 'Pokémon Energy'
+  desc: 'Basic Energy card frame.'
+  templates:
+    Pokémon Energy:
+      BasicEnergyPokemonTemplate:
+      - pokemon_energy

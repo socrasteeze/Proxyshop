@@ -44,6 +44,34 @@ class TestNormalization:
         assert card['game'] == 'union-arena'
         assert card['set'] == 'Jujutsu Kaisen'
 
+    def test_riftbound_requires_key(self, monkeypatch):
+        monkeypatch.delenv('PROXYSHOP_APITCG_KEY', raising=False)
+        with pytest.raises(games.ProviderError, match='apitcg.com'):
+            games.search_riftbound('Annie')
+
+    def test_riftbound_normalization(self, monkeypatch):
+        monkeypatch.setenv('PROXYSHOP_APITCG_KEY', 'k')
+        payload = {'data': [{
+            'id': 'origins-proving-grounds-001/024',
+            'number': '001/024', 'code': '001/024', 'name': 'Annie - Fiery',
+            'domain': 'Fury', 'energyCost': '5', 'powerCost': '1', 'might': '4',
+            'cardType': 'Champion Unit', 'rarity': 'Epic',
+            'set': {
+                'id': 'origins-proving-grounds',
+                'name': 'Origins: Proving Grounds',
+                'releaseDate': '2025-10-31'},
+            'images': {'small': 'https://img.example/rb.jpg',
+                       'large': 'https://img.example/rb-large.jpg'}}]}
+        monkeypatch.setattr(games, '_get', lambda url, params, extra_headers=None: payload)
+        (card,) = games.search_riftbound('Annie')
+        assert card['id'] == 'rb-origins-proving-grounds-001/024'
+        assert card['game'] == 'riftbound'
+        assert card['set'] == 'origins-proving-grounds'
+        assert card['set_name'] == 'Origins: Proving Grounds'
+        assert card['collector_number'] == '001/024'
+        assert card['released_at'] == '2025-10-31'
+        assert 'Annie' in card['name']
+
 
 class TestMultiGameDb:
 

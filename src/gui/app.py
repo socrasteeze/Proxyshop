@@ -60,6 +60,7 @@ from src.layouts import (
     assign_layout,
     join_dual_card_layouts,
     NormalLayout)
+from src.games.dispatch import assign_layout_for_game
 from src.templates import BaseTemplate
 from src.utils.adobe import get_photoshop_error_message, PhotoshopHandler, PS_EXCEPTIONS
 from src.utils.hexapi import update_hexproof_cache, get_api_key
@@ -422,9 +423,9 @@ class ProxyshopGUIApp(App):
             return self.console.update(
                 "No art images found!" if target else "No art images selected!")
 
-        # Run through each file, assigning layout
+        # Run through each file, assigning layout (MTG or Pokémon via ENV.GAME)
         with ThreadPoolExecutor(max_workers=cpu_count()) as pool:
-            cards = pool.map(assign_layout, files)
+            cards = pool.map(assign_layout_for_game, files)
 
         # Join dual card layouts
         cards = join_dual_card_layouts(list(cards))

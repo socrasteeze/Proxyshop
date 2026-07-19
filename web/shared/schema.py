@@ -31,6 +31,7 @@ class JobSubmit(BaseModel):
     collector_number: Optional[str] = Field(default=None, max_length=10)
     template_name: Optional[str] = Field(default=None, max_length=100)
     lang: str = Field(default='en', max_length=5)
+    game: str = Field(default='mtg', max_length=20)
 
 
 class Job(BaseModel):
@@ -42,7 +43,8 @@ class Job(BaseModel):
     collector_number: Optional[str] = None
     template_name: Optional[str] = None
     lang: str = 'en'
-    card_json: Optional[str] = None      # Full Scryfall card object, pre-resolved by server
+    game: str = 'mtg'
+    card_json: Optional[str] = None      # Full card object, pre-resolved by server
     art_filename: Optional[str] = None
     result_filename: Optional[str] = None
     error: Optional[str] = None
@@ -75,12 +77,13 @@ class TemplateInfo(BaseModel):
 class Capabilities(BaseModel):
     """Capabilities handshake sent by the worker on startup.
 
-    Maps card class (layout type, e.g. 'normal', 'saga') to the list of
-    templates the worker can render for that class.
+    Maps card class (layout type, e.g. 'normal', 'saga', 'pokemon') to the
+    list of templates the worker can render for that class.
     """
     worker_name: str = 'worker'
     proxyshop_version: str = 'unknown'
     templates: dict[str, list[TemplateInfo]] = Field(default_factory=dict)
+    games: list[str] = Field(default_factory=lambda: ['mtg'])
 
 
 """

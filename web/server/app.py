@@ -38,6 +38,9 @@ from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
     Capabilities, DeckCardLine, DeckImportReport, JobResult, JobStatus)
 
+# Games the worker can render via Photoshop (others are search/image only)
+RENDERABLE_GAMES = frozenset({'mtg', 'pokemon'})
+
 """
 * Configuration
 """
@@ -136,11 +139,54 @@ async def _save_upload(upload: UploadFile, dest: Path) -> int:
     return written
 
 
-def _resolve_card(name: str, set_code: Optional[str], number: Optional[str], lang: str) -> Optional[dict]:
+def _resolve_card(
+    name: str,
+    set_code: Optional[str],
+    number: Optional[str],
+    lang: str,
+    game: str = 'mtg',
+) -> Optional[dict]:
     """Resolve a card through the local DB (cache-first, API fallback unless offline)."""
-    if set_code and number:
-        return carddb.get_card(set_code, number, lang)
-    return carddb.find_card(name, set_code, lang)
+    if game == 'mtg':
+        if set_code and number:
+            return carddb.get_card(set_code, number, lang)
+        return carddb.find_card(name, set_code, lang)
+    # Non-MTG: local cache first, then live provider search
+    local = carddb.search_local(name, limit=20, game=game)
+    if set_code:
+        set_l = set_code.lower()
+        local = [
+            c for c in local
+            if (c.get('set') or '').lower() == set_l
+            or (c.get('set_name') or '').lower() == set_l]
+    if number:
+        num = str(number)
+        exact = [c for c in local if str(c.get('collector_number') or '') == num]
+        if exact:
+            return exact[0]
+    if local:
+        return local[0]
+    if OFFLINE or game not in games.PROVIDERS:
+        return None
+    try:
+        results = games.PROVIDERS[game](name, 20)
+    except Exception:
+        return None
+    for card in results:
+        carddb.store_card(card, commit=False, game=game)
+    carddb._conn().commit()
+    if set_code:
+        set_l = set_code.lower()
+        results = [
+            c for c in results
+            if (c.get('set') or '').lower() == set_l
+            or (c.get('set_name') or '').lower() == set_l] or results
+    if number:
+        num = str(number)
+        exact = [c for c in results if str(c.get('collector_number') or '') == num]
+        if exact:
+            return exact[0]
+    return results[0] if results else None
 
 
 def _capabilities() -> Optional[Capabilities]:
@@ -166,6 +212,8 @@ def page_index(request: Request):
         'workers': store.get_workers(),
         'caps': caps,
         'stats': carddb.stats(),
+        'games': games.GAME_LABELS,
+        'renderable_games': sorted(RENDERABLE_GAMES),
     })
 
 
@@ -241,12 +289,30 @@ async def api_submit_job(
     collector_number: Optional[str] = Form(default=None, max_length=10),
     template_name: Optional[str] = Form(default=None, max_length=100),
     lang: str = Form(default='en', max_length=5),
+    game: str = Form(default='mtg', max_length=20),
     art: Optional[UploadFile] = File(default=None),
     idempotency_key: Optional[str] = Form(default=None, max_length=100),
 ):
-    """Submit a render job. Art upload is optional — without one, the
-    high-quality Scryfall art crop is fetched and used instead."""
+    """Submit a render job. Art upload is optional for MTG — without one, the
+    high-quality Scryfall art crop is fetched and used instead. Pokémon requires
+    an art upload (no art-crop equivalent)."""
     rate_limit(request, 'submit')
+
+    game = (game or 'mtg').strip().lower()
+    if game not in RENDERABLE_GAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Game {game!r} is not renderable — supported: '
+                   + ', '.join(sorted(RENDERABLE_GAMES)))
+
+    # Reject if no worker advertises this game
+    caps = _capabilities()
+    if caps and caps.games and game not in caps.games:
+        raise HTTPException(
+            status_code=422,
+            detail=f'No worker currently supports rendering {game!r} '
+                   f'(worker games: {", ".join(caps.games)}). '
+                   f'Install Pokémon templates on the Windows worker if needed.')
 
     has_upload = art is not None and (art.filename or '') != ''
     if has_upload:
@@ -256,13 +322,17 @@ async def api_submit_job(
                 status_code=422,
                 detail=f'Unsupported art file type {suffix!r}')
 
-    # Resolve card data server-side so the worker can skip Scryfall entirely
-    card = _resolve_card(card_name.strip(), set_code, collector_number, lang)
+    # Resolve card data server-side so the worker can skip live lookups
+    card = _resolve_card(card_name.strip(), set_code, collector_number, lang, game=game)
     card_json = json.dumps(card, separators=(',', ':')) if card else None
 
-    # Without an upload we must have card data + a fetchable art crop
+    # Without an upload we must have card data + a fetchable art crop (MTG only)
     art_source: Optional[Path] = None
     if not has_upload:
+        if game != 'mtg':
+            raise HTTPException(
+                status_code=422,
+                detail=f'{games.GAME_LABELS.get(game, game)} jobs require an art upload.')
         if not card:
             raise HTTPException(
                 status_code=422,
@@ -281,6 +351,7 @@ async def api_submit_job(
         collector_number=(collector_number or None),
         template_name=(template_name or None),
         lang=lang,
+        game=game,
         card_json=card_json,
         idempotency_key=(idempotency_key or None))
 
@@ -298,7 +369,7 @@ async def api_submit_job(
             art_path.write_bytes(art_source.read_bytes())
             store.set_art(job.id, art_name)
 
-    return {'id': job.id, 'status': job.status, 'card_resolved': card is not None}
+    return {'id': job.id, 'status': job.status, 'card_resolved': card is not None, 'game': game}
 
 
 @app.get('/api/jobs')
@@ -382,15 +453,30 @@ def page_card(request: Request, card_id: str):
                 return v
         return None
 
+    # Riftbound stats live on provider_data (domain/energy/might/powerCost)
+    rb_stats = None
+    if game == 'riftbound':
+        parts = []
+        if provider.get('domain'):
+            parts.append(str(provider['domain']))
+        if provider.get('energyCost') is not None:
+            parts.append(f"Energy {provider['energyCost']}")
+        if provider.get('powerCost') is not None:
+            parts.append(f"Power {provider['powerCost']}")
+        if provider.get('might') is not None:
+            parts.append(f"Might {provider['might']}")
+        rb_stats = ' · '.join(parts) if parts else None
+
     details = [(label, value) for label, value in [
         ('Set', f"{first('set_name') or (card.get('set') or '').upper()}"
                 + (f" · #{card.get('collector_number')}" if card.get('collector_number') else '')),
         ('Mana cost', first('mana_cost')),
-        ('Type', first('type_line', 'supertype')),
-        ('Text', first('oracle_text', 'effect', 'ability')),
+        ('Type', first('type_line', 'supertype', 'cardType')),
+        ('Text', first('oracle_text', 'effect', 'ability', 'description')),
         ('P/T', f"{card.get('power')}/{card.get('toughness')}"
                 if card.get('power') is not None else None),
         ('HP', provider.get('hp')),
+        ('Domain / Stats', rb_stats),
         ('Rarity', first('rarity')),
         ('Artist', first('artist')),
         ('Released', first('released_at')),

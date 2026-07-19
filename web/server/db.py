@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     collector_number TEXT,
     template_name TEXT,
     lang TEXT NOT NULL DEFAULT 'en',
+    game TEXT NOT NULL DEFAULT 'mtg',
     card_json TEXT,
     art_filename TEXT,
     result_filename TEXT,
@@ -61,6 +62,14 @@ class JobStore:
         with self._conn() as con:
             con.executescript(SCHEMA)
             con.execute('PRAGMA journal_mode=WAL')
+            self._migrate(con)
+
+    def _migrate(self, con: sqlite3.Connection) -> None:
+        """Add columns introduced after the initial schema."""
+        cols = {r[1] for r in con.execute('PRAGMA table_info(jobs)').fetchall()}
+        if 'game' not in cols:
+            con.execute("ALTER TABLE jobs ADD COLUMN game TEXT NOT NULL DEFAULT 'mtg'")
+            con.commit()
 
     def _conn(self) -> sqlite3.Connection:
         con = getattr(self._local, 'con', None)
@@ -73,6 +82,8 @@ class JobStore:
     @staticmethod
     def _to_job(row: sqlite3.Row) -> Job:
         d = {k: row[k] for k in row.keys() if k != 'idempotency_key'}
+        # Older rows / DBs may omit game until migration runs
+        d.setdefault('game', 'mtg')
         return Job(**d)
 
     """
@@ -86,6 +97,7 @@ class JobStore:
         collector_number: Optional[str] = None,
         template_name: Optional[str] = None,
         lang: str = 'en',
+        game: str = 'mtg',
         card_json: Optional[str] = None,
         art_filename: Optional[str] = None,
         idempotency_key: Optional[str] = None
@@ -105,11 +117,11 @@ class JobStore:
         con.execute(
             """
             INSERT INTO jobs (id, card_name, set_code, collector_number,
-                              template_name, lang, card_json, art_filename, idempotency_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              template_name, lang, game, card_json, art_filename, idempotency_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (job_id, card_name, set_code, collector_number,
-             template_name, lang, card_json, art_filename, idempotency_key))
+             template_name, lang, game or 'mtg', card_json, art_filename, idempotency_key))
         con.commit()
         return self.get(job_id)
 

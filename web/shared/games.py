@@ -5,6 +5,7 @@
 * carddb; these providers cover:
 *   - pokemon      -> pokemontcg.io (free; optional API key raises limits)
 *   - union-arena  -> apitcg.com   (community aggregator; free API key required)
+*   - riftbound    -> apitcg.com   (same key as Union Arena)
 * Must never import from `src/`.
 """
 # Standard Library Imports
@@ -21,12 +22,13 @@ POKEMON_API = 'https://api.pokemontcg.io/v2'
 APITCG_API = 'https://apitcg.com/api'
 
 # Games supported by the search/image layer ('mtg' is handled by carddb)
-GAMES = ('mtg', 'pokemon', 'union-arena')
+GAMES = ('mtg', 'pokemon', 'union-arena', 'riftbound')
 
 GAME_LABELS = {
     'mtg': 'Magic: The Gathering',
     'pokemon': 'Pokémon',
     'union-arena': 'Union Arena',
+    'riftbound': 'Riftbound',
 }
 
 
@@ -88,6 +90,21 @@ def search_pokemon(name: str, limit: int = 20) -> list[dict]:
 
 
 """
+* apitcg.com helpers (Union Arena, Riftbound)
+"""
+
+
+def _apitcg_key() -> str:
+    """Return PROXYSHOP_APITCG_KEY or raise ProviderError."""
+    key = os.environ.get('PROXYSHOP_APITCG_KEY')
+    if not key:
+        raise ProviderError(
+            'Riftbound and Union Arena need a free apitcg.com API key — register at '
+            'https://apitcg.com and set PROXYSHOP_APITCG_KEY on the server.')
+    return key
+
+
+"""
 * Union Arena (apitcg.com)
 """
 
@@ -97,15 +114,10 @@ def search_union_arena(name: str, limit: int = 20) -> list[dict]:
 
     Requires a free API key from apitcg.com in env PROXYSHOP_APITCG_KEY.
     """
-    key = os.environ.get('PROXYSHOP_APITCG_KEY')
-    if not key:
-        raise ProviderError(
-            'Union Arena needs a free apitcg.com API key — register at '
-            'https://apitcg.com and set PROXYSHOP_APITCG_KEY on the server.')
     data = _get(
         f'{APITCG_API}/union-arena/cards',
         params={'name': name, 'limit': min(limit, 50)},
-        extra_headers={'x-api-key': key})
+        extra_headers={'x-api-key': _apitcg_key()})
     cards = []
     for c in data.get('data', []):
         images = c.get('images') or {}
@@ -127,8 +139,54 @@ def search_union_arena(name: str, limit: int = 20) -> list[dict]:
     return [c for c in cards if c['id'] not in ('pkm-', 'ua-') and c['name']]
 
 
+"""
+* Riftbound (apitcg.com)
+"""
+
+
+def search_riftbound(name: str, limit: int = 20) -> list[dict]:
+    """Search Riftbound cards by name via the apitcg.com aggregator.
+
+    Requires a free API key from apitcg.com in env PROXYSHOP_APITCG_KEY
+    (same key as Union Arena).
+    """
+    data = _get(
+        f'{APITCG_API}/riftbound/cards',
+        params={'name': name, 'limit': min(limit, 50)},
+        extra_headers={'x-api-key': _apitcg_key()})
+    cards = []
+    for c in data.get('data', []):
+        images = c.get('images') or {}
+        set_info = c.get('set') or {}
+        set_id = ''
+        set_name = ''
+        released = None
+        if isinstance(set_info, dict):
+            set_id = str(set_info.get('id') or '')
+            set_name = str(set_info.get('name') or set_id)
+            released = set_info.get('releaseDate')
+        else:
+            set_name = str(set_info or '')
+        code = str(c.get('code') or c.get('number') or c.get('id') or '')
+        cards.append({
+            'object': 'card',
+            'game': 'riftbound',
+            'id': f"rb-{c.get('id') or code}",
+            'name': c.get('name', ''),
+            'set': set_id or set_name,
+            'set_name': set_name or set_id,
+            'collector_number': code,
+            'lang': 'en',
+            'released_at': released,
+            'images': images,
+            'provider_data': c,
+        })
+    return [c for c in cards if c['id'] not in ('rb-',) and c['name']]
+
+
 # Registry used by the server: game -> search callable
 PROVIDERS: dict[str, Callable[[str, int], list[dict]]] = {
     'pokemon': search_pokemon,
     'union-arena': search_union_arena,
+    'riftbound': search_riftbound,
 }

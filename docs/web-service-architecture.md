@@ -77,13 +77,21 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   through to a detail view with the full-size scan, attributes, prices, and
   HQ download buttons. Supported games: **MTG** (Scryfall),
   **Pokémon** ([pokemontcg.io](https://pokemontcg.io) — works keyless; a free
-  key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), and **Union Arena**
-  ([apitcg.com](https://apitcg.com) — requires a free key in
+  key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), **Union Arena** and
+  **Riftbound** ([apitcg.com](https://apitcg.com) — both require a free key in
   `PROXYSHOP_APITCG_KEY`). Everything found online is cached locally, so the
-  browser works offline for anything you've seen before. Rendering remains
-  MTG-only (Proxyshop's templates are MTG frames).
-- **Art-less rendering**: submitting a render job without an art upload
+  browser works offline for anything you've seen before. Photoshop rendering
+  supports **MTG** and **Pokémon** (when Pokémon templates are installed on
+  the Windows worker); Union Arena and Riftbound remain search/image only.
+- **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
+  Pokémon jobs always require an art upload.
+- **Multi-game rendering**: jobs carry a `game` field (`mtg` or `pokemon`).
+  The Windows worker advertises which games it can render in its capabilities
+  handshake (`games: ["mtg"]` until Pokémon PSDs are installed under
+  `plugins/PokemonTCG/templates/`). Desktop GUI/CLI defaults to MTG; set
+  `PROXYSHOP_GAME=pokemon` (or `GAME: pokemon` in `env.yml`) for local
+  Pokémon batch renders.
 - **Print prep**: each saved deck has *Download images* — a ZIP of unique HQ
   scans plus a `decklist.txt` manifest, ready for
   [Proxxied](https://proxxied.com/) or any print-prep tool — and *PDF sheet*,
@@ -174,7 +182,7 @@ script overwrites itself on update). Create them once, then re-run the
 update script so the container restarts with them:
 
 ```sh
-# Union Arena search (free key from https://apitcg.com):
+# Union Arena + Riftbound search (free key from https://apitcg.com):
 echo '<your apitcg key>' > ~/.proxyshop-apitcg-key
 chmod 600 ~/.proxyshop-apitcg-key
 # Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):

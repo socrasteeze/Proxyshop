@@ -12,6 +12,12 @@ class TestSubmitAndClaim:
         job = jobstore.submit(card_name='Lightning Bolt')
         assert job.status == JobStatus.QUEUED
         assert job.attempts == 0
+        assert job.game == 'mtg'
+
+    def test_submit_pokemon_game(self, jobstore):
+        job = jobstore.submit(card_name='Pikachu', game='pokemon')
+        assert job.game == 'pokemon'
+        assert jobstore.get(job.id).game == 'pokemon'
 
     def test_claim_oldest_first(self, jobstore):
         first = jobstore.submit(card_name='First')

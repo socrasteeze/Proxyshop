@@ -35,6 +35,9 @@
     {% if game == 'mtg' %}
     <p class="muted">Render this card as a proxy from the <a href="/">Render page</a> —
       leave the art upload empty to use its Scryfall art.</p>
+    {% elif game == 'pokemon' %}
+    <p class="muted">Render this card as a proxy from the <a href="/?game=pokemon">Render page</a>
+      (select Pokémon, upload art). Requires Pokémon templates installed on the Windows worker.</p>
     {% endif %}
   </div>
 </div>

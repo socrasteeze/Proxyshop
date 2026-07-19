@@ -1,0 +1,3 @@
+"""
+* Pokémon TCG game package
+"""

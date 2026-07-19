@@ -54,19 +54,23 @@ function wireAsyncForm(form, onSuccess) {
 }
 
 /* Card-name autocomplete: debounced fetch into a <datalist>. Searches the
-   local card DB first, falling back to live Scryfall (cached server-side). */
-function wireCardAutocomplete(input, datalist) {
+   local card DB first, falling back to live provider (cached server-side).
+   getGame is an optional () => gameSlug used for multi-game search. */
+function wireCardAutocomplete(input, datalist, getGame) {
   if (!input || !datalist) return;
   let timer = null;
-  let lastQuery = '';
+  let lastKey = '';
   input.addEventListener('input', () => {
     const q = input.value.trim();
+    const game = (typeof getGame === 'function' ? getGame() : 'mtg') || 'mtg';
+    const key = `${game}:${q}`;
     clearTimeout(timer);
-    if (q.length < 3 || q === lastQuery) return;
+    if (q.length < 3 || key === lastKey) return;
     timer = setTimeout(async () => {
-      lastQuery = q;
+      lastKey = key;
       try {
-        const res = await fetch(`/api/cards/search?q=${encodeURIComponent(q)}&limit=12`);
+        const res = await fetch(
+          `/api/cards/search?q=${encodeURIComponent(q)}&limit=12&game=${encodeURIComponent(game)}`);
         if (!res.ok) return;
         const data = await res.json();
         const names = [...new Set(data.cards.map(c => c.name))];

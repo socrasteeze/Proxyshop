@@ -26,8 +26,8 @@ def image_uri(card: dict, kind: str) -> Optional[str]:
     """Resolve an image URI from a cached card object.
 
     MTG cards use Scryfall's image_uris (front face for DFCs). Other games
-    (pokemon, union-arena) carry a normalized images block where 'large' is
-    the highest quality available — 'png'/'large' both map to it.
+    (pokemon, union-arena, riftbound) carry a normalized images block where
+    'large' is the highest quality available — 'png'/'large' both map to it.
     """
     if card.get('game', 'mtg') != 'mtg':
         images = card.get('images') or {}

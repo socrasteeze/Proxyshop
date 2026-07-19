@@ -25,7 +25,7 @@ PORT="8000:8000"                            # host:container
 CONTAINER_USER="0:0"                        # match owning uid:gid of your mounts (ls -n)
 DATA_DIR="/Volume1/proxyshop/data"          # TerraMaster: /Volume1 (capital V!)
 WORKER_TOKEN_FILE="$HOME/.proxyshop-worker-token"  # server<->worker shared secret
-APITCG_KEY_FILE="$HOME/.proxyshop-apitcg-key"          # Union Arena (free key: apitcg.com)
+APITCG_KEY_FILE="$HOME/.proxyshop-apitcg-key"          # Union Arena + Riftbound (free key: apitcg.com)
 POKEMONTCG_KEY_FILE="$HOME/.proxyshop-pokemontcg-key"  # optional (raises pokemontcg.io limits)
 # --------------------------
 
@@ -99,8 +99,8 @@ mkdir -p "$DATA_DIR"
 # Provider API keys — optional files, empty means "no key" to the app
 APITCG_KEY="$(cat "$APITCG_KEY_FILE" 2>/dev/null || true)"
 POKEMONTCG_KEY="$(cat "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
-[ -n "$APITCG_KEY" ] && echo "==> Union Arena API key: found" \
-                     || echo "==> Union Arena API key: none (Union Arena search disabled)"
+[ -n "$APITCG_KEY" ] && echo "==> ApiTCG key: found (Union Arena + Riftbound)" \
+                     || echo "==> ApiTCG key: none (Union Arena + Riftbound search disabled)"
 
 if [ -n "${DRY_RUN:-}" ]; then
   echo "==> DRY_RUN set — skipping docker build/run/verify. Install complete."
@@ -135,7 +135,7 @@ while [ $i -lt 15 ]; do
     echo "    First deploy? Import the card database once:"
     echo "    docker exec $APP_NAME python -m web.server.manage bulk-download"
     if [ -z "$APITCG_KEY" ]; then
-      echo "    Union Arena search needs a free apitcg.com key:"
+      echo "    Union Arena + Riftbound search need a free apitcg.com key:"
       echo "    echo '<key>' > $APITCG_KEY_FILE  (then re-run this script)"
     fi
     exit 0

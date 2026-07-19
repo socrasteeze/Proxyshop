@@ -31,6 +31,10 @@ class LayoutCategory(StrConstant):
     Split = 'Split'
     Token = 'Token'
     Transform = 'Transform'
+    # Pokémon TCG
+    Pokemon = 'Pokémon'
+    PokemonTrainer = 'Pokémon Trainer'
+    PokemonEnergy = 'Pokémon Energy'
 
 
 class LayoutType(StrConstant):
@@ -54,6 +58,10 @@ class LayoutType(StrConstant):
     Split = 'split'
     TransformBack = 'transform_back'
     TransformFront = 'transform_front'
+    # Pokémon TCG
+    Pokemon = 'pokemon'
+    PokemonTrainer = 'pokemon_trainer'
+    PokemonEnergy = 'pokemon_energy'
 
 
 class LayoutScryfall(StrConstant):
@@ -104,7 +112,10 @@ layout_map_category: dict[LayoutCategory, list[LayoutType]] = {
     LayoutCategory.Leveler: [LayoutType.Leveler],
     LayoutCategory.Split: [LayoutType.Split],
     LayoutCategory.Battle: [LayoutType.Battle],
-    LayoutCategory.Planar: [LayoutType.Planar]
+    LayoutCategory.Planar: [LayoutType.Planar],
+    LayoutCategory.Pokemon: [LayoutType.Pokemon],
+    LayoutCategory.PokemonTrainer: [LayoutType.PokemonTrainer],
+    LayoutCategory.PokemonEnergy: [LayoutType.PokemonEnergy],
 }
 
 """Maps Layout types to their equivalent Layout category."""

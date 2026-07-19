@@ -56,8 +56,13 @@ def get_capabilities(worker_name: str) -> Capabilities:
             'normal': [
                 TemplateInfo(name='Normal (Fake)', class_name='FakeTemplate'),
                 TemplateInfo(name='Extended (Fake)', class_name='FakeExtendedTemplate'),
-            ]
-        })
+            ],
+            'pokemon': [
+                TemplateInfo(name='Pokémon Normal (Fake)', class_name='FakePokemonTemplate',
+                             installed=True),
+            ],
+        },
+        games=['mtg', 'pokemon'])
 
 
 def render(job: Job, art_path: Path, out_dir: Path) -> tuple[bool, Optional[Path], str, Optional[str]]:
@@ -66,7 +71,11 @@ def render(job: Job, art_path: Path, out_dir: Path) -> tuple[bool, Optional[Path
     Returns:
         (ok, result_path, log, error) — same contract as the real renderer.
     """
-    log = [f'[fake] rendering {job.card_name!r} with template {job.template_name or "default"}']
+    game = getattr(job, 'game', None) or 'mtg'
+    log = [
+        f'[fake] game={game}',
+        f'[fake] rendering {job.card_name!r} with template {job.template_name or "default"}',
+    ]
     time.sleep(1.5)
     out_dir.mkdir(parents=True, exist_ok=True)
     result = out_dir / f'{job.id}.png'

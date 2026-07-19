@@ -60,14 +60,30 @@ class TestPages:
 
 class TestJobSubmission:
 
-    def test_submit_and_fetch(self, client):
-        res = submit_job(client)
+    def test_submit_pokemon_requires_art(self, client):
+        res = client.post('/api/jobs', data={
+            'card_name': 'Pikachu', 'game': 'pokemon'})
+        assert res.status_code == 422
+        assert 'art' in res.json()['detail'].lower()
+
+    def test_submit_rejects_non_renderable_game(self, client):
+        res = client.post(
+            '/api/jobs',
+            data={'card_name': 'Annie', 'game': 'riftbound'},
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 422
+        assert 'not renderable' in res.json()['detail'].lower()
+
+    def test_submit_pokemon_with_art(self, client):
+        res = client.post(
+            '/api/jobs',
+            data={'card_name': 'Pikachu', 'game': 'pokemon', 'set_code': 'sv1'},
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
         assert res.status_code == 200
-        job_id = res.json()['id']
-        job = client.get(f'/api/jobs/{job_id}').json()
-        assert job['status'] == 'queued'
-        assert job['card_name'] == 'Lightning Bolt'
-        assert job['art_filename'] == 'art.png'
+        body = res.json()
+        assert body['game'] == 'pokemon'
+        job = client.get(f"/api/jobs/{body['id']}").json()
+        assert job['game'] == 'pokemon'
 
     def test_card_resolution_flag(self, appmod, client):
         # Unknown card in offline mode -> queued but unresolved
