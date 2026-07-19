@@ -1,6 +1,13 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# Line endings that must survive Windows checkouts
+# ================================================
+# Shell scripts must be LF — CRLF breaks /bin/sh on the NAS.
+*.sh     text eol=lf
+# Windows batch files must be CRLF.
+*.bat    text eol=crlf
+
 # Source files
 # ============
 *.pxd    text diff=python
