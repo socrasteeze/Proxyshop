@@ -189,6 +189,62 @@ class TestJobSubmission:
         assert res.headers['content-type'].startswith('image/png')
         assert res.content[:8] == b'\x89PNG\r\n\x1a\n'
 
+    def test_api_compose_with_art_transform(self, client):
+        import json as _json
+        card = {
+            'name': 'Opt', 'mana_cost': '{U}', 'type_line': 'Instant',
+            'oracle_text': 'Scry 1.', 'colors': ['U'], 'set': 'dom',
+            'collector_number': '60',
+        }
+        res = client.post(
+            '/api/compose',
+            data={
+                'game': 'mtg',
+                'card_json': _json.dumps(card),
+                'art_transform': _json.dumps({
+                    'scale': 1.4, 'offset_x': -0.3, 'offset_y': 0.2}),
+            },
+            files={'art': ('art.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 200
+        assert res.content[:8] == b'\x89PNG\r\n\x1a\n'
+
+    def test_submit_compose_with_client_card_json(self, appmod, client):
+        import json as _json
+        appmod.carddb.store_card(make_card('cj-1', 'Lightning Bolt', 'lea', '161'))
+        # Fake art so compose doesn't need CDN
+        from pathlib import Path
+        from PIL import Image
+        art = Path(appmod.IMAGES_DIR) / 'cj-1-art_crop.jpg'
+        art.parent.mkdir(parents=True, exist_ok=True)
+        Image.new('RGB', (64, 64), (200, 40, 40)).save(art)
+
+        edited = {
+            'id': 'cj-1',
+            'name': 'Lightning Bolt',
+            'mana_cost': '{R}',
+            'type_line': 'Instant',
+            'oracle_text': 'CUSTOM TEXT FROM EDITOR',
+            'colors': ['R'],
+            'set': 'lea',
+            'collector_number': '161',
+        }
+        res = client.post(
+            '/api/jobs',
+            data={
+                'card_name': 'Lightning Bolt',
+                'game': 'mtg',
+                'render_mode': 'compose',
+                'card_json': _json.dumps(edited),
+            },
+            files={'art': ('custom.png', io.BytesIO(PNG_BYTES), 'image/png')})
+        assert res.status_code == 200
+        body = res.json()
+        assert body['status'] == 'done'
+        job = client.get(f"/api/jobs/{body['id']}").json()
+        stored = _json.loads(job['card_json'])
+        assert stored['oracle_text'] == 'CUSTOM TEXT FROM EDITOR'
+        assert stored.get('_custom_art') is True
+
     def test_editor_page(self, appmod, client):
         appmod.carddb.store_card(make_card('edit-1', 'Sol Ring', 'c21', '125'))
         # Legacy /edit redirects into Make workspace

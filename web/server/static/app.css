@@ -779,6 +779,31 @@ body.modal-open { overflow: hidden; }
   border: none;
   background: transparent;
 }
+.art-transform {
+  display: grid;
+  gap: .55rem;
+  margin-top: .75rem;
+  padding: .7rem .8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .12);
+}
+.art-transform input[type="range"] {
+  width: 100%;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.check-inline {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .85rem;
+  color: var(--muted);
+}
+.check-inline input {
+  width: auto;
+  margin: 0;
+}
 .advanced-block {
   border: 1px solid var(--border);
   border-radius: 10px;

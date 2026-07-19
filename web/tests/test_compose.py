@@ -158,3 +158,81 @@ def test_compose_card_dispatch(tmp_path):
     compose_card('pokemon', {'name': 'X', 'provider_data': {
         'name': 'X', 'types': ['Psychic'], 'supertype': 'Pokémon'}}, out_path=out)
     assert out.is_file()
+
+
+def test_paste_cover_art_transform(tmp_path):
+    from PIL import Image
+    from web.shared.compose.text import normalize_art_transform, paste_cover
+
+    t = normalize_art_transform({'scale': 2, 'offset_x': -1, 'offset_y': 1})
+    assert t['scale'] == 2.0
+    assert t['offset_x'] == -1.0
+    assert t['offset_y'] == 1.0
+
+    base = Image.new('RGBA', (200, 200), (0, 0, 0, 255))
+    # Distinct color in top-left so pan can be observed
+    art = Image.new('RGBA', (100, 100), (0, 0, 255, 255))
+    for x in range(20):
+        for y in range(20):
+            art.putpixel((x, y), (255, 0, 0, 255))
+    paste_cover(base, art, (0, 0, 100, 100), transform={'scale': 2, 'offset_x': -1, 'offset_y': -1})
+    # Top-left of box should pull from art's top-left (red)
+    assert base.getpixel((5, 5))[:3] == (255, 0, 0)
+
+    out = tmp_path / 'mtg-zoom.png'
+    from web.shared.compose.mtg import compose_mtg
+    card = {
+        'name': 'Bolt', 'mana_cost': '{R}', 'type_line': 'Instant',
+        'oracle_text': 'Deal 3.', 'colors': ['R'], 'set': 'lea',
+        'collector_number': '1',
+    }
+    art_path = tmp_path / 'art.png'
+    Image.new('RGB', (400, 300), (20, 180, 40)).save(art_path)
+    img = compose_mtg(
+        card, art_path=art_path, out_path=out,
+        art_transform={'scale': 1.5, 'offset_x': 0.2, 'offset_y': -0.2},
+        custom_art=True)
+    assert out.is_file()
+    assert img.size[0] == 750
+
+
+def test_custom_art_skips_full_scan_extract(tmp_path):
+    """Portrait custom art must not be treated as an official card scan."""
+    from PIL import Image
+    from web.shared.compose.pokemon import compose_pokemon
+
+    # Portrait near card aspect — would trigger extract without custom_art
+    art = Image.new('RGB', (750, 1050), (10, 200, 10))
+    path = tmp_path / 'portrait.png'
+    art.save(path)
+    card = {
+        'name': 'Custom', 'provider_data': {
+            'name': 'Custom', 'types': ['Grass'], 'supertype': 'Pokémon',
+            'hp': '60', 'subtypes': ['Basic'],
+        },
+    }
+    out = tmp_path / 'pkm.png'
+    img = compose_pokemon(card, art_path=path, out_path=out, custom_art=True)
+    assert out.is_file()
+    assert img.size[0] == 750
+
+
+def test_frame_style_and_layers_and_bleed(tmp_path):
+    from PIL import Image
+    from web.shared.compose.mtg import compose_mtg
+    from web.shared.compose.text import expand_symbols
+
+    assert expand_symbols('{W}{T}') == 'W⟳'
+    card = {
+        'name': 'Bolt', 'mana_cost': '{R}', 'type_line': 'Instant',
+        'oracle_text': 'Deal 3. {T}', 'colors': ['R'], 'set': 'lea',
+        'collector_number': '1', 'frame': 'borderless',
+        '_layers': {'art': True, 'text': True, 'footer': False},
+    }
+    art = tmp_path / 'a.png'
+    Image.new('RGB', (200, 200), (90, 20, 20)).save(art)
+    out = tmp_path / 'bleed.png'
+    img = compose_mtg(card, art_path=art, out_path=out, custom_art=True, bleed_px=20)
+    assert out.is_file()
+    # Default 750 + 2*20 bleed
+    assert img.size == (790, 1090)

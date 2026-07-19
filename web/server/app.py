@@ -130,6 +130,33 @@ def _job_dir(job_id: str) -> Path:
     return d
 
 
+def _parse_art_transform(raw: Optional[str]) -> Optional[dict]:
+    """Parse optional art_transform form JSON; None if empty/invalid."""
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    from web.shared.compose.text import normalize_art_transform
+    return normalize_art_transform(data)
+
+
+def _parse_client_card_json(raw: Optional[str]) -> Optional[dict]:
+    """Parse optional editor card_json for job submit; None if missing/bad."""
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or not (data.get('name') or data.get('id')):
+        return None
+    return data
+
+
 async def _save_upload(upload: UploadFile, dest: Path) -> int:
     """Stream an upload to disk, enforcing the size cap. Returns bytes written."""
     written = 0
@@ -219,6 +246,7 @@ def page_index(request: Request, card_id: str = ''):
     if card and game not in COMPOSE_GAMES and game not in RENDERABLE_GAMES:
         card = None
         game = 'mtg'
+    from web.shared.compose.frames import FRAME_STYLES
     return templates.TemplateResponse(request, 'index.html', {
         'jobs': store.list_jobs(30),
         'workers': store.get_workers(),
@@ -227,6 +255,7 @@ def page_index(request: Request, card_id: str = ''):
         'games': games.GAME_LABELS,
         'renderable_games': sorted(RENDERABLE_GAMES),
         'compose_games': sorted(COMPOSE_GAMES),
+        'frame_styles': FRAME_STYLES,
         'card': card,
         'card_id': card_id if card else '',
         'game': game,
@@ -487,6 +516,8 @@ async def api_submit_job(
     game: str = Form(default='mtg', max_length=20),
     render_mode: str = Form(default='auto', max_length=20),
     art: Optional[UploadFile] = File(default=None),
+    card_json: Optional[str] = Form(default=None, max_length=200_000),
+    art_transform: Optional[str] = Form(default=None, max_length=2000),
     idempotency_key: Optional[str] = Form(default=None, max_length=100),
 ):
     """Submit a render job.
@@ -499,6 +530,9 @@ async def api_submit_job(
     Art upload is optional for MTG (Scryfall art crop) and for compose-mode
     cards (HQ scan / art crop used as art). Photoshop Pokémon still prefers an
     explicit art upload.
+
+    Optional card_json (from the Make editor) keeps printing details in sync with
+    the live preview. Optional art_transform pans/zooms custom art in Compose.
     """
     rate_limit(request, 'submit')
 
@@ -542,8 +576,22 @@ async def api_submit_job(
                 status_code=422,
                 detail=f'Unsupported art file type {suffix!r}')
 
-    card = _resolve_card(card_name.strip(), set_code, collector_number, lang, game=game)
-    card_json = json.dumps(card, separators=(',', ':')) if card else None
+    client_card = _parse_client_card_json(card_json)
+    resolved = _resolve_card(card_name.strip(), set_code, collector_number, lang, game=game)
+    # Prefer editor payload (same details as preview); fall back to DB resolve
+    card = client_card or resolved
+    if card is None and resolved is not None:
+        card = resolved
+
+    transform = _parse_art_transform(art_transform)
+    store_payload = dict(card) if card else None
+    if store_payload is not None:
+        if transform:
+            store_payload['_art_transform'] = transform
+        if has_upload:
+            store_payload['_custom_art'] = True
+    card_json_out = (
+        json.dumps(store_payload, separators=(',', ':')) if store_payload else None)
 
     art_source: Optional[Path] = None
     if not has_upload:
@@ -559,7 +607,7 @@ async def api_submit_job(
             if not art_source and effective == 'compose':
                 art_source = images.ensure_image(
                     carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE)
-            if not art_source:
+            if not art_source and not (effective == 'compose' and client_card):
                 raise HTTPException(
                     status_code=422,
                     detail='No Scryfall art available for this card — upload an art file.')
@@ -571,7 +619,8 @@ async def api_submit_job(
                     detail='Card not found — search first or upload art.')
             art_source = images.ensure_image(
                 carddb.session, card, 'png', IMAGES_DIR, offline=OFFLINE)
-            if not art_source:
+            # Blank / custom cards may have no cached image — compose frame-only
+            if not art_source and not client_card:
                 raise HTTPException(
                     status_code=422,
                     detail='No card image available — upload an art file.')
@@ -589,7 +638,7 @@ async def api_submit_job(
         lang=lang,
         game=game,
         render_mode=effective,
-        card_json=card_json,
+        card_json=card_json_out,
         idempotency_key=(idempotency_key or None))
 
     # Persist art next to the job
@@ -599,7 +648,7 @@ async def api_submit_job(
         if not art_path.exists():
             await _save_upload(art, art_path)
             store.set_art(job.id, art_name)
-    else:
+    elif art_source is not None:
         art_name = f'art{art_source.suffix}'
         art_path = _job_dir(job.id) / art_name
         if not art_path.exists():
@@ -634,12 +683,16 @@ def _run_compose_job(job_id: str) -> dict:
             'set': job.set_code or '',
             'collector_number': job.collector_number or '',
         }
+        transform = card.pop('_art_transform', None) if isinstance(card, dict) else None
+        custom_art = bool(card.pop('_custom_art', False)) if isinstance(card, dict) else False
         art_path = None
         if job.art_filename:
             art_path = _job_dir(job_id) / job.art_filename
         result_name = 'result.png'
         result_path = _job_dir(job_id) / result_name
-        compose_card(job.game, card, art_path=art_path, out_path=result_path)
+        compose_card(
+            job.game, card, art_path=art_path, out_path=result_path,
+            art_transform=transform, custom_art=custom_art)
         log.append(f'wrote {result_name}')
         store.finish(job_id, ok=True, result_filename=result_name, log='\n'.join(log))
         done = store.get(job_id)
@@ -667,10 +720,14 @@ async def api_compose(
     game: str = Form(default='mtg', max_length=20),
     card_json: str = Form(min_length=2, max_length=200_000),
     art: Optional[UploadFile] = File(default=None),
+    art_transform: Optional[str] = Form(default=None, max_length=2000),
+    bleed_px: int = Form(default=0),
 ):
     """Compose a card preview/download from edited fields (browser editor).
 
     Accepts a Scryfall-/provider-shaped JSON object plus optional art.
+    Optional art_transform JSON: {scale, offset_x, offset_y} for pan/zoom.
+    Optional bleed_px pads the PNG for print.
     Returns a PNG. Does not create a job.
     """
     rate_limit(request, 'submit')
@@ -686,7 +743,14 @@ async def api_compose(
     if not isinstance(card, dict):
         raise HTTPException(status_code=422, detail='card_json must be an object')
 
+    transform = _parse_art_transform(art_transform)
+    try:
+        bleed = max(0, min(int(bleed_px or 0), 120))
+    except (TypeError, ValueError):
+        bleed = 0
+
     art_path: Optional[Path] = None
+    custom_art = False
     tmp_dir = DATA_DIR / 'compose-tmp'
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_art = None
@@ -697,6 +761,7 @@ async def api_compose(
         tmp_art = tmp_dir / f'{uuid_module.uuid4().hex}{suffix}'
         await _save_upload(art, tmp_art)
         art_path = tmp_art
+        custom_art = True
     else:
         # Prefer cached art crop (MTG) or HQ scan
         card_id = card.get('id')
@@ -711,7 +776,9 @@ async def api_compose(
 
     out = tmp_dir / f'{uuid_module.uuid4().hex}.png'
     try:
-        compose_card(game, card, art_path=art_path, out_path=out)
+        compose_card(
+            game, card, art_path=art_path, out_path=out,
+            art_transform=transform, custom_art=custom_art, bleed_px=bleed)
         safe = re.sub(r'[^-\w. \[\]{}()]', '_', f"{card.get('name', 'card')}.png")
         return FileResponse(out, media_type='image/png', filename=safe)
     except Exception as e:

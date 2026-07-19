@@ -39,6 +39,38 @@ RIFTBOUND_DOMAIN_COLORS: dict[str, tuple[int, int, int]] = {
 }
 
 
+def mtg_art_box(style: str = 'default') -> tuple[int, int, int, int]:
+    style = (style or 'default').lower()
+    if style == 'borderless':
+        return (20, 90, CARD_W - 20, 720)
+    if style in ('fullart', 'extended', 'textless'):
+        return (16, 16, CARD_W - 16, CARD_H - 120)
+    return (48, 130, CARD_W - 48, 560)
+
+
+def pokemon_art_box(style: str = 'default', *, trainer: bool = False) -> tuple[int, int, int, int]:
+    style = (style or 'default').lower()
+    if style in ('fullart', 'borderless'):
+        return (20, 100, CARD_W - 20, 700)
+    if trainer:
+        return (48, 140, CARD_W - 48, 520)
+    return (48, 140, CARD_W - 48, 560)
+
+
+def riftbound_art_box(style: str = 'default') -> tuple[int, int, int, int]:
+    style = (style or 'default').lower()
+    if style in ('wide', 'borderless', 'fullart'):
+        return (20, 90, CARD_W - 20, 720)
+    return (40, 120, CARD_W - 40, 620)
+
+
+FRAME_STYLES: dict[str, list[str]] = {
+    'mtg': ['default', 'borderless', 'fullart'],
+    'pokemon': ['default', 'fullart'],
+    'riftbound': ['default', 'wide'],
+}
+
+
 def _slug(value: str) -> str:
     return ''.join(c if c.isalnum() else '_' for c in (value or '').strip().lower())
 

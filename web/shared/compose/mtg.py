@@ -10,8 +10,9 @@ from PIL import Image
 
 # Local Imports
 from web.shared.compose import CARD_H, CARD_W
-from web.shared.compose.frames import FRAMES_ROOT, _procedural_frame
-from web.shared.compose.text import draw_text, paste_cover
+from web.shared.compose.frames import FRAMES_ROOT, _procedural_frame, mtg_art_box
+from web.shared.compose.text import (
+    apply_bleed, draw_text, frame_style_of, layers_of, paste_cover)
 
 MTG_COLOR_MAP: dict[str, tuple[int, int, int]] = {
     'W': (230, 220, 180),
@@ -39,17 +40,23 @@ def _accent_for_card(card: dict) -> tuple[int, int, int]:
     return MTG_COLOR_MAP['M']
 
 
-def load_or_make_mtg_frame(card: dict) -> Image.Image:
-    path = FRAMES_ROOT / 'mtg' / 'default.png'
-    if path.is_file():
-        return Image.open(path).convert('RGBA').resize((CARD_W, CARD_H), Image.Resampling.LANCZOS)
-    return _procedural_frame(_accent_for_card(card), art_box=(48, 130, CARD_W - 48, 560))
+def load_or_make_mtg_frame(card: dict, style: str = 'default') -> Image.Image:
+    style = (style or 'default').lower()
+    for name in (style, 'default'):
+        path = FRAMES_ROOT / 'mtg' / f'{name}.png'
+        if path.is_file():
+            return Image.open(path).convert('RGBA').resize(
+                (CARD_W, CARD_H), Image.Resampling.LANCZOS)
+    return _procedural_frame(_accent_for_card(card), art_box=mtg_art_box(style))
 
 
 def compose_mtg(
     card: dict,
     art_path: Optional[Union[str, Path]] = None,
     out_path: Optional[Union[str, Path]] = None,
+    art_transform: Optional[dict] = None,
+    custom_art: bool = False,  # noqa: ARG001 — parity with other games
+    bleed_px: int = 0,
 ) -> Image.Image:
     """Compose an MTG-style proxy from Scryfall-shaped card data + optional art."""
     # Prefer front face for DFCs when present
@@ -58,11 +65,13 @@ def compose_mtg(
     if faces and isinstance(faces[0], dict):
         face = {**card, **faces[0]}
 
-    frame = load_or_make_mtg_frame(face if face.get('colors') is not None else card)
-    art_box = (48, 130, frame.size[0] - 48, 560)
-    if art_path and Path(art_path).is_file():
+    style = frame_style_of(card)
+    layers = layers_of(card)
+    frame = load_or_make_mtg_frame(face if face.get('colors') is not None else card, style)
+    art_box = mtg_art_box(style)
+    if layers['art'] and art_path and Path(art_path).is_file():
         try:
-            paste_cover(frame, Image.open(art_path), art_box)
+            paste_cover(frame, Image.open(art_path), art_box, transform=art_transform)
         except Exception:
             pass
 
@@ -76,27 +85,34 @@ def compose_mtg(
     set_code = (card.get('set') or '').upper()
     number = card.get('collector_number') or ''
 
-    draw_text(frame, name, (48, 48), size=32, bold=True, fill=(255, 255, 255),
-              max_width=frame.size[0] - 220)
-    if mana:
-        draw_text(frame, mana, (frame.size[0] - 200, 52), size=24, bold=True,
-                  fill=(255, 240, 200))
+    if layers['text']:
+        name_y = 48 if style == 'default' else 28
+        draw_text(frame, name, (48, name_y), size=32, bold=True, fill=(255, 255, 255),
+                  max_width=frame.size[0] - 220)
+        if mana:
+            draw_text(frame, mana, (frame.size[0] - 200, name_y + 4), size=24, bold=True,
+                      fill=(255, 240, 200))
 
-    draw_text(frame, type_line, (48, 575), size=22, bold=True, fill=(235, 235, 235),
-              max_width=frame.size[0] - 96)
-
-    y = draw_text(frame, oracle, (48, 620), size=20, fill=(220, 220, 220),
+        type_y = 575 if style == 'default' else art_box[3] + 12
+        draw_text(frame, type_line, (48, type_y), size=22, bold=True, fill=(235, 235, 235),
                   max_width=frame.size[0] - 96)
 
-    if power is not None and toughness is not None:
-        draw_text(frame, f'{power}/{toughness}', (frame.size[0] - 160, frame.size[1] - 100),
-                  size=36, bold=True, fill=(255, 255, 255))
+        oracle_y = type_y + 45
+        draw_text(frame, oracle, (48, oracle_y), size=20, fill=(220, 220, 220),
+                  max_width=frame.size[0] - 96)
 
-    draw_text(
-        frame,
-        f'{set_code}  #{number}   {artist}'.strip(),
-        (48, frame.size[1] - 50), size=16, fill=(160, 160, 160))
+        if power is not None and toughness is not None:
+            draw_text(frame, f'{power}/{toughness}',
+                      (frame.size[0] - 160, frame.size[1] - 100),
+                      size=36, bold=True, fill=(255, 255, 255))
 
+    if layers['footer']:
+        draw_text(
+            frame,
+            f'{set_code}  #{number}   {artist}'.strip(),
+            (48, frame.size[1] - 50), size=16, fill=(160, 160, 160))
+
+    frame = apply_bleed(frame, bleed_px)
     if out_path:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         frame.convert('RGB').save(out_path, 'PNG')

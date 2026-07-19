@@ -30,6 +30,14 @@
       <input id="card-search" type="search" placeholder="Start typing a card name…" autocomplete="off">
     </label>
   </div>
+  <div class="btn-row" style="margin-top:.7rem">
+    <button type="button" class="btn-ghost" id="btn-new-blank">New blank card</button>
+    <button type="button" class="btn-ghost" id="btn-export-json">Export JSON</button>
+    <label class="btn-ghost" style="display:inline-flex;align-items:center;cursor:pointer;margin:0">
+      Import JSON
+      <input type="file" id="import-json" accept="application/json,.json" hidden>
+    </label>
+  </div>
   <div id="selected-chip" class="selected-chip" {% if not card %}hidden{% endif %}>
     {% if card %}
     <img src="/api/cards/{{ card.id }}/image?kind=large" alt="">
@@ -40,11 +48,11 @@
     <span id="selected-label"></span>
     {% endif %}
   </div>
-  <p class="muted" style="margin:.7rem 0 0">Pick a printing to edit text/art, preview with Compose, or queue Photoshop.</p>
+  <p class="muted" style="margin:.7rem 0 0">Pick a printing (or start blank), replace art, preview with Compose, or queue Photoshop.</p>
 </div>
 
 <div id="workspace-empty" class="panel workspace-empty" {% if card %}hidden{% endif %}>
-  <p>Search above to load a card into the editor.</p>
+  <p>Search above to load a card, or start a <strong>New blank card</strong>.</p>
   <p class="muted">Or find a card in the <a href="/gallery">card library</a> and click <strong>Open in editor</strong>.</p>
 </div>
 
@@ -68,7 +76,7 @@
       <button type="button" id="btn-queue" class="btn-ghost">Queue render</button>
     </div>
     <span class="muted" id="editor-msg"></span>
-    <p class="muted preview-hint">Compose = blank frame + your art/text on the NAS.</p>
+    <p class="muted preview-hint">Replace art keeps the same frame and details. Compose previews on the NAS.</p>
   </aside>
 
   <section class="panel make-form">
@@ -78,13 +86,52 @@
       <input type="hidden" id="base-game" value="{{ game }}">
 
       <div class="art-block">
-        <p class="group-title">Art</p>
-        <label class="art-drop">
-          <span class="art-drop-label">Upload custom art</span>
-          <span class="muted">PNG, JPG, WebP, TIFF — replaces the art window</span>
+        <p class="group-title">Replace art</p>
+        <p class="muted" style="margin:0 0 .55rem">
+          Keep this printing’s frame and details — only the art window changes.
+        </p>
+        <label class="art-drop" id="art-drop">
+          <span class="art-drop-label">Choose image</span>
+          <span class="muted" id="art-status">Using original art</span>
           <input type="file" id="art-input" accept=".png,.jpg,.jpeg,.webp,.tif,.tiff">
         </label>
+        <div class="btn-row" style="margin-top:.55rem">
+          <button type="button" class="btn-ghost" id="art-clear" hidden>Use original art</button>
+        </div>
+        <div id="art-transform" class="art-transform" hidden>
+          <label>Zoom
+            <input type="range" id="art-scale" min="100" max="250" value="100" step="5">
+          </label>
+          <label>Pan X
+            <input type="range" id="art-ox" min="-100" max="100" value="0" step="5">
+          </label>
+          <label>Pan Y
+            <input type="range" id="art-oy" min="-100" max="100" value="0" step="5">
+          </label>
+          <button type="button" class="btn-ghost" id="art-reset-transform">Reset position</button>
+        </div>
       </div>
+
+      <div class="field-block" style="margin-top:.85rem">
+        <p class="group-title">Frame &amp; layout</p>
+        <label>Compose frame
+          <select id="frame-select">
+            <option value="default">Default</option>
+          </select>
+        </label>
+        <div class="field-row field-row--3" style="margin-top:.55rem">
+          <label class="check-inline"><input type="checkbox" id="layer-art" checked> Art</label>
+          <label class="check-inline"><input type="checkbox" id="layer-text" checked> Text</label>
+          <label class="check-inline"><input type="checkbox" id="layer-footer" checked> Footer</label>
+        </div>
+        <label style="margin-top:.55rem">Print bleed (px)
+          <input type="number" id="bleed-px" min="0" max="120" value="0" step="5">
+        </label>
+      </div>
+
+      <details class="advanced-block" id="details-fields">
+        <summary>Card details <span class="muted">(optional — usually leave as-is)</span></summary>
+        <div class="field-block" style="margin-top:.65rem">
 
       <div id="fields-mtg" class="field-block" {% if game != 'mtg' %}hidden{% endif %}>
         <p class="group-title">Basics</p>
@@ -94,7 +141,7 @@
           <label>Type line <input id="mtg-type" value="{{ card.type_line if card and game == 'mtg' else '' }}"></label>
         </div>
         <label>Oracle text <textarea id="mtg-oracle" class="plain" rows="4">{{ card.oracle_text if card and game == 'mtg' else '' }}</textarea></label>
-        <div class="field-row field-row--3">
+        <div class="field-row field-row--3" id="mtg-pt-row">
           <label>Power <input id="mtg-power" value="{{ card.power if card and game == 'mtg' and card.power is not none else '' }}"></label>
           <label>Toughness <input id="mtg-tough" value="{{ card.toughness if card and game == 'mtg' and card.toughness is not none else '' }}"></label>
           <label>Artist <input id="mtg-artist" value="{{ card.artist if card and game == 'mtg' else '' }}"></label>
@@ -107,35 +154,48 @@
 
       {% set p = (card.provider_data if card else {}) or {} %}
       <div id="fields-pokemon" class="field-block" {% if game != 'pokemon' %}hidden{% endif %}>
-        <p class="group-title">Basics</p>
-        <label>Name <input id="pkm-name" value="{% if card and game == 'pokemon' %}{{ p.name or card.name or '' }}{% endif %}"></label>
+        <p class="group-title">Template</p>
         <div class="field-row field-row--3">
-          <label>HP <input id="pkm-hp" value="{{ p.hp if game == 'pokemon' else '' }}"></label>
+          <label>Supertype
+            <select id="pkm-supertype">
+              <option value="Pokémon" {% if (p.supertype if game == 'pokemon' else 'Pokémon') == 'Pokémon' %}selected{% endif %}>Pokémon</option>
+              <option value="Trainer" {% if (p.supertype if game == 'pokemon' else '') == 'Trainer' %}selected{% endif %}>Trainer</option>
+              <option value="Energy" {% if (p.supertype if game == 'pokemon' else '') == 'Energy' %}selected{% endif %}>Energy</option>
+            </select>
+          </label>
           <label>Type <input id="pkm-types" value="{{ (p.types or [])|join(', ') if game == 'pokemon' else '' }}" placeholder="Fire"></label>
           <label>Stage <input id="pkm-subtypes" value="{{ (p.subtypes or [])|join(', ') if game == 'pokemon' else '' }}" placeholder="Basic"></label>
         </div>
-        <label>Supertype <input id="pkm-supertype" value="{{ p.supertype if game == 'pokemon' else 'Pokémon' }}"></label>
-        <label>Rules text <span class="muted">(Trainers)</span>
-          <textarea id="pkm-rules" class="plain" rows="3">{% if game == 'pokemon' %}{{ (p.rules or [])|join('\n\n') }}{% endif %}</textarea>
-        </label>
-        <p class="group-title">Ability</p>
-        {% set ab0 = (p.abilities or [{}])[0] if game == 'pokemon' else {} %}
-        <label>Name <input id="pkm-ab-name" value="{{ ab0.name if ab0 else '' }}"></label>
-        <label>Text <textarea id="pkm-ab-text" class="plain" rows="2">{{ ab0.text if ab0 else '' }}</textarea></label>
-        <p class="group-title">Attack 1</p>
-        {% set at0 = (p.attacks or [{}])[0] if game == 'pokemon' else {} %}
-        <div class="field-row">
-          <label>Name <input id="pkm-atk0-name" value="{{ at0.name if at0 else '' }}"></label>
-          <label class="field-narrow">Damage <input id="pkm-atk0-dmg" value="{{ at0.damage if at0 else '' }}"></label>
+        <p class="group-title">Basics</p>
+        <label>Name <input id="pkm-name" value="{% if card and game == 'pokemon' %}{{ p.name or card.name or '' }}{% endif %}"></label>
+        <div class="field-row" id="pkm-hp-row">
+          <label>HP <input id="pkm-hp" value="{{ p.hp if game == 'pokemon' else '' }}"></label>
         </div>
-        <label>Text <textarea id="pkm-atk0-text" class="plain" rows="2">{{ at0.text if at0 else '' }}</textarea></label>
-        <p class="group-title">Attack 2</p>
-        {% set at1 = (p.attacks[1] if game == 'pokemon' and p.attacks and p.attacks|length > 1 else {}) %}
-        <div class="field-row">
-          <label>Name <input id="pkm-atk1-name" value="{{ at1.name if at1 else '' }}"></label>
-          <label class="field-narrow">Damage <input id="pkm-atk1-dmg" value="{{ at1.damage if at1 else '' }}"></label>
+        <div id="pkm-rules-block">
+          <label>Rules text <span class="muted">(Trainers / Energy)</span>
+            <textarea id="pkm-rules" class="plain" rows="3">{% if game == 'pokemon' %}{{ (p.rules or [])|join('\n\n') }}{% endif %}</textarea>
+          </label>
         </div>
-        <label>Text <textarea id="pkm-atk1-text" class="plain" rows="2">{{ at1.text if at1 else '' }}</textarea></label>
+        <div id="pkm-pokemon-blocks">
+          <p class="group-title">Ability</p>
+          {% set ab0 = (p.abilities or [{}])[0] if game == 'pokemon' else {} %}
+          <label>Name <input id="pkm-ab-name" value="{{ ab0.name if ab0 else '' }}"></label>
+          <label>Text <textarea id="pkm-ab-text" class="plain" rows="2">{{ ab0.text if ab0 else '' }}</textarea></label>
+          <p class="group-title">Attack 1</p>
+          {% set at0 = (p.attacks or [{}])[0] if game == 'pokemon' else {} %}
+          <div class="field-row">
+            <label>Name <input id="pkm-atk0-name" value="{{ at0.name if at0 else '' }}"></label>
+            <label class="field-narrow">Damage <input id="pkm-atk0-dmg" value="{{ at0.damage if at0 else '' }}"></label>
+          </div>
+          <label>Text <textarea id="pkm-atk0-text" class="plain" rows="2">{{ at0.text if at0 else '' }}</textarea></label>
+          <p class="group-title">Attack 2</p>
+          {% set at1 = (p.attacks[1] if game == 'pokemon' and p.attacks and p.attacks|length > 1 else {}) %}
+          <div class="field-row">
+            <label>Name <input id="pkm-atk1-name" value="{{ at1.name if at1 else '' }}"></label>
+            <label class="field-narrow">Damage <input id="pkm-atk1-dmg" value="{{ at1.damage if at1 else '' }}"></label>
+          </div>
+          <label>Text <textarea id="pkm-atk1-text" class="plain" rows="2">{{ at1.text if at1 else '' }}</textarea></label>
+        </div>
         <div class="field-row field-row--3">
           <label>Artist <input id="pkm-artist" value="{{ p.artist if game == 'pokemon' else '' }}"></label>
           <label>Set <input id="pkm-set" value="{{ card.set if card and game == 'pokemon' else '' }}"></label>
@@ -144,13 +204,28 @@
       </div>
 
       <div id="fields-riftbound" class="field-block" {% if game != 'riftbound' %}hidden{% endif %}>
+        <p class="group-title">Template</p>
+        <div class="field-row">
+          <label>Domain
+            <select id="rb-domain">
+              <option value="">Any</option>
+              {% for d in ['Fury','Calm','Mind','Body','Chaos','Order'] %}
+              <option value="{{ d }}" {% if game == 'riftbound' and p.domain == d %}selected{% endif %}>{{ d }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Card type
+            <select id="rb-cardtype">
+              <option value="">Any</option>
+              {% for t in ['Unit','Spell','Battlefield','Gear','Legend','Token'] %}
+              <option value="{{ t }}" {% if game == 'riftbound' and p.cardType == t %}selected{% endif %}>{{ t }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
         <p class="group-title">Basics</p>
         <label>Name <input id="rb-name" value="{% if card and game == 'riftbound' %}{{ p.name or card.name or '' }}{% endif %}"></label>
-        <div class="field-row">
-          <label>Domain <input id="rb-domain" value="{{ p.domain if game == 'riftbound' else '' }}"></label>
-          <label>Card type <input id="rb-cardtype" value="{{ p.cardType if game == 'riftbound' else '' }}"></label>
-        </div>
-        <div class="field-row field-row--3">
+        <div class="field-row field-row--3" id="rb-stats-row">
           <label>Energy <input id="rb-energy" value="{{ p.energyCost if game == 'riftbound' else '' }}"></label>
           <label>Power <input id="rb-power" value="{{ p.powerCost if game == 'riftbound' else '' }}"></label>
           <label>Might <input id="rb-might" value="{{ p.might if game == 'riftbound' else '' }}"></label>
@@ -164,6 +239,8 @@
         </div>
       </div>
 
+        </div>
+      </details>
       <details class="advanced-block">
         <summary>Render options</summary>
         <div class="field-block">
@@ -223,6 +300,7 @@
 
 <script>
 const COMPOSE_GAMES = new Set({{ compose_games | tojson }});
+const FRAME_STYLES = {{ frame_styles | tojson }};
 let BASE_CARD = {{ (card if card else none) | tojson }};
 let GAME = {{ game | tojson }};
 
@@ -236,19 +314,141 @@ const els = {
   preview: document.getElementById('preview'),
   placeholder: document.getElementById('preview-placeholder'),
   art: document.getElementById('art-input'),
+  artStatus: document.getElementById('art-status'),
+  artClear: document.getElementById('art-clear'),
+  artTransform: document.getElementById('art-transform'),
+  artScale: document.getElementById('art-scale'),
+  artOx: document.getElementById('art-ox'),
+  artOy: document.getElementById('art-oy'),
   mode: document.getElementById('mode-select'),
   cardId: document.getElementById('card-id'),
+  frame: document.getElementById('frame-select'),
+  bleed: document.getElementById('bleed-px'),
+  layerArt: document.getElementById('layer-art'),
+  layerText: document.getElementById('layer-text'),
+  layerFooter: document.getElementById('layer-footer'),
 };
+
+function artTransformPayload() {
+  if (!els.art.files[0]) return null;
+  return {
+    scale: (Number(els.artScale.value) || 100) / 100,
+    offset_x: (Number(els.artOx.value) || 0) / 100,
+    offset_y: (Number(els.artOy.value) || 0) / 100,
+  };
+}
+
+function syncArtUi() {
+  const file = els.art.files[0];
+  if (file) {
+    els.artStatus.textContent = `Custom art: ${file.name}`;
+    els.artClear.hidden = false;
+    els.artTransform.hidden = false;
+  } else {
+    els.artStatus.textContent = 'Using original art';
+    els.artClear.hidden = true;
+    els.artTransform.hidden = true;
+    els.artScale.value = '100';
+    els.artOx.value = '0';
+    els.artOy.value = '0';
+  }
+}
+
+function clearArt() {
+  els.art.value = '';
+  syncArtUi();
+  scheduleCompose();
+}
+
+function resetArtTransform() {
+  els.artScale.value = '100';
+  els.artOx.value = '0';
+  els.artOy.value = '0';
+  scheduleCompose();
+}
 
 function setPreviewSrc(url) {
   els.preview.src = url;
   if (els.placeholder) els.placeholder.hidden = true;
 }
 
+function syncFrameOptions(game) {
+  const styles = FRAME_STYLES[game] || ['default'];
+  const cur = els.frame.value || 'default';
+  els.frame.innerHTML = '';
+  styles.forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+    els.frame.appendChild(opt);
+  });
+  els.frame.value = styles.includes(cur) ? cur : styles[0];
+}
+
+function syncCascades() {
+  if (GAME === 'mtg') {
+    const type = (document.getElementById('mtg-type').value || '').toLowerCase();
+    const showPt = type.includes('creature') || type.includes('vehicle');
+    document.getElementById('mtg-pt-row').hidden = !showPt;
+  }
+  if (GAME === 'pokemon') {
+    const st = (document.getElementById('pkm-supertype').value || '').toLowerCase();
+    const isMon = !st.includes('trainer') && !st.includes('energy');
+    document.getElementById('pkm-hp-row').hidden = !isMon;
+    document.getElementById('pkm-pokemon-blocks').hidden = !isMon;
+    document.getElementById('pkm-rules-block').hidden = isMon;
+  }
+  if (GAME === 'riftbound') {
+    const ct = (document.getElementById('rb-cardtype').value || '').toLowerCase();
+    const showStats = !ct || ct === 'unit' || ct === 'legend' || ct === 'token';
+    document.getElementById('rb-stats-row').hidden = !showStats;
+  }
+}
+
 function showGameFields(game) {
   document.getElementById('fields-mtg').hidden = game !== 'mtg';
   document.getElementById('fields-pokemon').hidden = game !== 'pokemon';
   document.getElementById('fields-riftbound').hidden = game !== 'riftbound';
+  syncFrameOptions(game);
+  syncCascades();
+}
+
+function blankCard(game) {
+  game = game || els.game.value || 'mtg';
+  if (game === 'mtg') {
+    return {
+      game: 'mtg', name: 'New Card', mana_cost: '', type_line: 'Creature',
+      oracle_text: '', power: '1', toughness: '1', artist: '', set: 'custom',
+      collector_number: '1', colors: [], frame: 'default',
+    };
+  }
+  if (game === 'pokemon') {
+    return {
+      game: 'pokemon', name: 'New Pokémon', set: 'custom', collector_number: '1',
+      frame: 'default',
+      provider_data: {
+        name: 'New Pokémon', hp: '60', types: ['Colorless'], subtypes: ['Basic'],
+        supertype: 'Pokémon', rules: [], abilities: [], attacks: [],
+        artist: '', number: '1',
+      },
+    };
+  }
+  return {
+    game: 'riftbound', name: 'New Unit', set_name: 'Custom', collector_number: '1',
+    frame: 'default',
+    provider_data: {
+      name: 'New Unit', domain: 'Fury', cardType: 'Unit',
+      energyCost: '1', powerCost: '1', might: '1',
+      description: '', flavorText: '', rarity: 'Common', code: '1',
+    },
+  };
+}
+
+function openWorkspace(card, { compose = true, historyUrl = null } = {}) {
+  fillFromCard(card);
+  if (historyUrl != null) history.replaceState(null, '', historyUrl);
+  else if (!card.id) history.replaceState(null, '', '/');
+  if (compose) scheduleCompose();
 }
 
 function fillFromCard(card) {
@@ -259,6 +459,15 @@ function fillFromCard(card) {
   showGameFields(GAME);
 
   const p = card.provider_data || {};
+  const layers = card._layers || {};
+  els.layerArt.checked = layers.art !== false;
+  els.layerText.checked = layers.text !== false;
+  els.layerFooter.checked = layers.footer !== false;
+  els.bleed.value = String(card._bleed_px || 0);
+  if (card.frame && (FRAME_STYLES[GAME] || []).includes(card.frame)) {
+    els.frame.value = card.frame;
+  }
+
   if (GAME === 'mtg') {
     document.getElementById('mtg-name').value = card.name || '';
     document.getElementById('mtg-mana').value = card.mana_cost || '';
@@ -305,24 +514,38 @@ function fillFromCard(card) {
     document.getElementById('rb-num').value = card.collector_number || '';
   }
 
-  const set = (card.set || '').toUpperCase();
+  syncCascades();
+  const set = (card.set || card.set_name || '').toUpperCase();
   const num = card.collector_number || '';
   els.chip.hidden = false;
-  els.chip.innerHTML = `
-    <img src="/api/cards/${encodeURIComponent(card.id)}/image?kind=large" alt="">
-    <span>${escapeHtml(card.name || '')} · ${escapeHtml(set)}${num ? ' #' + escapeHtml(num) : ''}</span>`;
+  const thumb = card.id
+    ? `/api/cards/${encodeURIComponent(card.id)}/image?kind=large`
+    : '';
+  els.chip.innerHTML = thumb
+    ? `<img src="${thumb}" alt=""><span>${escapeHtml(card.name || '')} · ${escapeHtml(set)}${num ? ' #' + escapeHtml(num) : ''}</span>`
+    : `<span>${escapeHtml(card.name || 'Blank card')} · custom</span>`;
   els.empty.hidden = true;
   els.workspace.hidden = false;
 
-  const kind = GAME === 'mtg' ? 'art_crop' : 'png';
-  setPreviewSrc(`/api/cards/${encodeURIComponent(card.id)}/image?kind=${kind}`);
-  history.replaceState(null, '', `/?card_id=${encodeURIComponent(card.id)}`);
-  scheduleCompose();
+  if (card.id) {
+    const kind = GAME === 'mtg' ? 'art_crop' : 'png';
+    setPreviewSrc(`/api/cards/${encodeURIComponent(card.id)}/image?kind=${kind}`);
+    history.replaceState(null, '', `/?card_id=${encodeURIComponent(card.id)}`);
+  } else if (els.placeholder) {
+    els.placeholder.hidden = false;
+  }
 }
 
 function buildCard() {
   const c = BASE_CARD ? JSON.parse(JSON.stringify(BASE_CARD)) : { game: GAME };
   c.game = GAME;
+  c.frame = els.frame.value || 'default';
+  c._layers = {
+    art: !!els.layerArt.checked,
+    text: !!els.layerText.checked,
+    footer: !!els.layerFooter.checked,
+  };
+  c._bleed_px = Math.max(0, Math.min(120, Number(els.bleed.value) || 0));
   if (GAME === 'mtg') {
     c.name = document.getElementById('mtg-name').value;
     c.mana_cost = document.getElementById('mtg-mana').value;
@@ -399,10 +622,14 @@ async function compose(download) {
     return;
   }
   els.msg.textContent = 'Composing…';
+  const card = buildCard();
   const fd = new FormData();
   fd.append('game', GAME);
-  fd.append('card_json', JSON.stringify(buildCard()));
+  fd.append('card_json', JSON.stringify(card));
+  fd.append('bleed_px', String(card._bleed_px || 0));
   if (els.art.files[0]) fd.append('art', els.art.files[0]);
+  const transform = artTransformPayload();
+  if (transform) fd.append('art_transform', JSON.stringify(transform));
   try {
     const res = await fetch('/api/compose', { method: 'POST', body: fd });
     if (!res.ok) {
@@ -415,11 +642,11 @@ async function compose(download) {
     if (els.preview._blobUrl) URL.revokeObjectURL(els.preview._blobUrl);
     els.preview._blobUrl = url;
     setPreviewSrc(url);
-    els.msg.textContent = 'Updated.';
+    els.msg.textContent = els.art.files[0] ? 'Art replaced.' : 'Updated.';
     if (download) {
       const a = document.createElement('a');
       a.href = url;
-      a.download = (buildCard().name || 'card') + '.png';
+      a.download = (card.name || 'card') + '.png';
       a.click();
     }
   } catch (e) {
@@ -434,14 +661,17 @@ async function queueRender() {
   }
   const card = buildCard();
   const fd = new FormData();
-  fd.append('card_name', card.name || BASE_CARD.name || '');
+  fd.append('card_name', card.name || BASE_CARD.name || 'Card');
   fd.append('set_code', card.set || BASE_CARD.set || '');
   fd.append('collector_number', card.collector_number || '');
   fd.append('game', GAME);
   fd.append('render_mode', els.mode.value);
   fd.append('template_name', document.getElementById('template-name').value);
   fd.append('idempotency_key', crypto.randomUUID());
+  fd.append('card_json', JSON.stringify(card));
   if (els.art.files[0]) fd.append('art', els.art.files[0]);
+  const transform = artTransformPayload();
+  if (transform) fd.append('art_transform', JSON.stringify(transform));
   els.msg.textContent = 'Queueing…';
   try {
     const res = await fetch('/api/jobs', { method: 'POST', body: fd });
@@ -456,13 +686,54 @@ async function queueRender() {
   }
 }
 
+function exportJson() {
+  if (!BASE_CARD) {
+    els.msg.textContent = 'Nothing to export yet.';
+    return;
+  }
+  const payload = {
+    card: buildCard(),
+    art_transform: artTransformPayload(),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (payload.card.name || 'card') + '.proxyshop.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importJsonFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const card = data.card || data;
+      if (!card || typeof card !== 'object' || !(card.name || card.id)) {
+        throw new Error('Missing card object');
+      }
+      clearArt();
+      openWorkspace(card, { historyUrl: '/' });
+      if (data.art_transform && typeof data.art_transform === 'object') {
+        els.artScale.value = String(Math.round((data.art_transform.scale || 1) * 100));
+        els.artOx.value = String(Math.round((data.art_transform.offset_x || 0) * 100));
+        els.artOy.value = String(Math.round((data.art_transform.offset_y || 0) * 100));
+      }
+      els.msg.textContent = 'Imported JSON.';
+    } catch (e) {
+      els.msg.textContent = 'Invalid JSON file.';
+    }
+  };
+  reader.readAsText(file);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   showGameFields(GAME);
 
   wireCardTypeahead(els.search, {
     getGame: () => els.game.value,
     onSelect: async (hit) => {
-      // Reload Make page with full card payload from server
       location.href = `/?card_id=${encodeURIComponent(hit.id)}`;
     },
   });
@@ -473,12 +744,39 @@ document.addEventListener('DOMContentLoaded', () => {
     els.search.value = '';
   });
 
-  document.getElementById('editor-form').addEventListener('input', scheduleCompose);
-  els.art.addEventListener('change', scheduleCompose);
+  document.getElementById('editor-form').addEventListener('input', () => {
+    syncCascades();
+    scheduleCompose();
+  });
+  document.getElementById('editor-form').addEventListener('change', () => {
+    syncCascades();
+    scheduleCompose();
+  });
+  els.art.addEventListener('change', () => {
+    syncArtUi();
+    scheduleCompose();
+  });
+  els.artClear.addEventListener('click', clearArt);
+  document.getElementById('art-reset-transform').addEventListener('click', resetArtTransform);
+  [els.artScale, els.artOx, els.artOy].forEach((el) => {
+    el.addEventListener('input', scheduleCompose);
+  });
   document.getElementById('btn-preview').addEventListener('click', () => compose(false));
   document.getElementById('btn-download').addEventListener('click', () => compose(true));
   document.getElementById('btn-queue').addEventListener('click', queueRender);
+  document.getElementById('btn-new-blank').addEventListener('click', () => {
+    clearArt();
+    openWorkspace(blankCard(els.game.value), { historyUrl: '/' });
+    els.msg.textContent = 'Blank card ready — add art or edit details.';
+  });
+  document.getElementById('btn-export-json').addEventListener('click', exportJson);
+  document.getElementById('import-json').addEventListener('change', (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (f) importJsonFile(f);
+    ev.target.value = '';
+  });
 
+  syncArtUi();
   if (BASE_CARD) scheduleCompose();
 });
 </script>
