@@ -56,13 +56,37 @@ class TestPages:
         appmod.carddb.store_card(make_card('gal-1', 'Sol Ring', 'c21', '125'))
         res = client.get('/gallery')
         assert res.status_code == 200
-        assert 'Cached gallery' in res.text
+        assert 'Card library' in res.text
         assert 'Sol Ring' in res.text
-        assert b'Gallery' in client.get('/').content
+        assert b'Card library' in client.get('/').content
         body = client.get('/api/cards/gallery').json()
         assert body['total'] == 1
         assert body['cards'][0]['name'] == 'Sol Ring'
         assert body['cards'][0]['thumb'].startswith('/api/cards/gal-1/image')
+
+    def test_gallery_page_clamps_out_of_range(self, appmod, client):
+        appmod.carddb.store_card(make_card('gal-1', 'Sol Ring', 'c21', '125'))
+        res = client.get('/gallery?page=999')
+        assert res.status_code == 200
+        # Out-of-range page clamps to the last page and still shows cards
+        assert 'Sol Ring' in res.text
+
+    def test_search_all_games_local_only(self, appmod, client):
+        appmod.carddb.store_card(make_card('mtg-1', 'Charizard Dragon', 'xyz', '1'))
+        pkm = make_card('pkm-1', 'Charizard', 'base1', '4')
+        pkm['game'] = 'pokemon'
+        appmod.carddb.store_card(pkm, game='pokemon')
+        body = client.get('/api/cards/search',
+                          params={'q': 'charizard', 'game': 'all'}).json()
+        assert body['source'] == 'local'
+        ids = {c['id'] for c in body['cards']}
+        assert ids == {'mtg-1', 'pkm-1'}
+        # Empty game param behaves the same
+        body2 = client.get('/api/cards/search',
+                           params={'q': 'charizard', 'game': ''}).json()
+        assert {c['id'] for c in body2['cards']} == ids
+        # HTML page renders too
+        assert client.get('/search?q=charizard&game=all').status_code == 200
 
     def test_health(self, client):
         body = client.get('/api/health').json()
@@ -147,7 +171,7 @@ class TestJobSubmission:
         page = client.get('/card/edit-1')
         assert page.status_code == 200
         assert b'/?card_id=edit-1' in page.content
-        assert b'Make / edit' in page.content
+        assert b'Open in editor' in page.content
 
     def test_delete_job(self, client):
         res = submit_job(client, name='Delete Me')
@@ -454,6 +478,8 @@ class TestCardViews:
         res = client.get('/api/cards/id-1/image', params={'kind': 'png'})
         assert res.status_code == 200
         assert res.content[:8] == b'\x89PNG\r\n\x1a\n'
+        # Immutable cache headers so grid thumbs aren't re-fetched per view
+        assert 'immutable' in res.headers.get('cache-control', '')
 
     def test_card_image_bad_kind_422(self, appmod, client):
         appmod.carddb.store_card(_card_with_images('id-1', 'Lightning Bolt'))

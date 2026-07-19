@@ -1,15 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Gallery — Proxyshop Web{% endblock %}
+{% block title %}Card library — Proxyshop{% endblock %}
 {% block content %}
 
 <div class="panel">
-  <h2>Cached gallery</h2>
-  <p class="muted">
-    Browse every card stored on this NAS
-    ({{ '{:,}'.format(total_all) }} total).
-    Images load from the local cache when available.
-  </p>
-  <form class="picker-row" method="get" action="/gallery" id="gallery-form">
+  <div class="panel-header">
+    <h2>Card library</h2>
+    <span class="muted">{{ '{:,}'.format(total_all) }} cards stored locally</span>
+  </div>
+  <form class="filter-bar" method="get" action="/gallery" id="gallery-form" role="search">
     <label>Game
       <select name="game" id="gallery-game">
         <option value="" {% if not game %}selected{% endif %}>All games</option>
@@ -20,27 +18,35 @@
         {% endfor %}
       </select>
     </label>
-    <label>Name
-      <input name="q" id="gallery-q" value="{{ q }}" placeholder="Filter by name…" autocomplete="off">
+    <label>Card name
+      <input name="q" id="gallery-q" value="{{ q }}" placeholder="Search by name…" autocomplete="off">
     </label>
     <label>Set
-      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="set code" autocomplete="off">
+      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="Set code (e.g. MH3)" autocomplete="off">
     </label>
-    <label>Sort
+    <label>Sort by
       <select name="sort" id="gallery-sort">
         <option value="name" {% if sort == 'name' %}selected{% endif %}>Name</option>
         <option value="set" {% if sort == 'set' %}selected{% endif %}>Set / number</option>
-        <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Recently cached</option>
+        <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Recently added</option>
       </select>
     </label>
-    <button type="submit">Browse</button>
+    <div class="filter-actions">
+      <button type="submit">Apply filters</button>
+      {% if q or set_code or game %}
+      <a class="btn btn-ghost" href="/gallery?sort={{ sort }}">Clear</a>
+      {% endif %}
+    </div>
   </form>
-  <div class="gallery-chips" style="margin-top:.8rem">
-    <a class="pill {% if not game %}pill-active{% endif %}" href="/gallery?sort={{ sort }}">All · {{ '{:,}'.format(total_all) }}</a>
+  <div class="gallery-chips">
+    <a class="pill {% if not game %}pill-active{% endif %}"
+       href="/gallery?sort={{ sort }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if set_code %}&set={{ set_code|urlencode }}{% endif %}">
+      All · {{ '{:,}'.format(total_all) }}
+    </a>
     {% for g, label in games.items() %}
     {% if counts.get(g) %}
     <a class="pill {% if game == g %}pill-active{% endif %}"
-       href="/gallery?game={{ g }}&sort={{ sort }}{% if q %}&q={{ q|urlencode }}{% endif %}">
+       href="/gallery?game={{ g }}&sort={{ sort }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if set_code %}&set={{ set_code|urlencode }}{% endif %}">
       {{ label }} · {{ '{:,}'.format(counts[g]) }}
     </a>
     {% endif %}
@@ -51,13 +57,13 @@
 <div class="panel">
   <div class="gallery-meta">
     <span class="muted">
-      Showing {{ cards|length }} of {{ '{:,}'.format(total) }}
+      Showing {{ cards|length }} of {{ '{:,}'.format(total) }} cards
       {% if game %}· {{ games.get(game, game) }}{% endif %}
       {% if q %}· “{{ q }}”{% endif %}
       {% if set_code %}· set {{ set_code|upper }}{% endif %}
     </span>
     {% if pages > 1 %}
-    <span class="muted">Page {{ page }} / {{ pages }}</span>
+    <span class="muted">Page {{ page }} of {{ pages }}</span>
     {% endif %}
   </div>
 
@@ -65,7 +71,8 @@
   <div class="card-grid" id="gallery-grid">
     {% for c in cards %}
     <a class="card-tile" href="/card/{{ c.id }}">
-      <img loading="lazy" src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+      <img loading="lazy" width="336" height="468"
+           src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
       <span class="caption">{{ c.name }}<br>
         <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
           · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
@@ -76,20 +83,35 @@
   </div>
   {% else %}
   <p class="muted">
-    No cached cards match.
+    No cards match your filters.
     {% if total_all == 0 %}
-    Use Search or Offline cache to pull cards in first.
+    Use <a href="/search">Search cards</a> to find cards online, or download a
+    catalog to the local cache first.
     {% endif %}
   </p>
   {% endif %}
 
   {% if pages > 1 %}
-  <nav class="gallery-pager btn-row" style="margin-top:1.2rem">
+  <nav class="gallery-pager" aria-label="Pagination">
     {% if page > 1 %}
-    <a class="pager-btn pager-btn--ghost" href="{{ page_url(page - 1) }}">Previous</a>
+    <a class="pager-btn pager-btn--ghost" href="{{ page_url(page - 1) }}"
+       rel="prev" aria-label="Go to page {{ page - 1 }}">&larr; Previous</a>
     {% endif %}
+    <span class="pager-pages">
+      {% set gap = namespace(prev=0) %}
+      {% for p in page_links %}
+      {% if gap.prev and p > gap.prev + 1 %}<span class="pager-gap" aria-hidden="true">…</span>{% endif %}
+      {% if p == page %}
+      <span class="pager-num pager-num--current" aria-current="page">{{ p }}</span>
+      {% else %}
+      <a class="pager-num" href="{{ page_url(p) }}" aria-label="Go to page {{ p }}">{{ p }}</a>
+      {% endif %}
+      {% set gap.prev = p %}
+      {% endfor %}
+    </span>
     {% if page < pages %}
-    <a class="pager-btn" href="{{ page_url(page + 1) }}">Next</a>
+    <a class="pager-btn" href="{{ page_url(page + 1) }}"
+       rel="next" aria-label="Go to page {{ page + 1 }}">Next &rarr;</a>
     {% endif %}
   </nav>
   {% endif %}
@@ -98,9 +120,33 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('gallery-form');
-  const game = document.getElementById('gallery-game');
-  game.addEventListener('change', () => form.submit());
+  document.getElementById('gallery-game').addEventListener('change', () => form.submit());
   document.getElementById('gallery-sort').addEventListener('change', () => form.submit());
+  // Debounced auto-search while typing; Enter still submits immediately.
+  // Focus is restored after the reload so typing can continue naturally.
+  const FOCUS_KEY = 'proxyshop.gallery.focus';
+  let t = null;
+  ['gallery-q', 'gallery-set'].forEach((id) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        try { sessionStorage.setItem(FOCUS_KEY, id); } catch (e) { /* private mode */ }
+        form.submit();
+      }, 650);
+    });
+  });
+  try {
+    const focusId = sessionStorage.getItem(FOCUS_KEY);
+    if (focusId) {
+      sessionStorage.removeItem(FOCUS_KEY);
+      const el = document.getElementById(focusId);
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }
+  } catch (e) { /* private mode */ }
 });
 </script>
 {% endblock %}

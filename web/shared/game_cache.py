@@ -247,7 +247,9 @@ def _store_and_image(
     watch: Optional['_StopWatch'] = None,
     print_fn=print,
 ) -> None:
-    db.store_card(card, source='catalog', game=progress.game)
+    # commit=False: the catalog loop commits once per provider page instead
+    # of fsyncing the WAL for every card.
+    db.store_card(card, source='catalog', game=progress.game, commit=False)
     progress.stored += 1
     # Riftbound: also store official JA/KO name rows (same art URL, searchable)
     if (
@@ -262,12 +264,11 @@ def _store_and_image(
                 variant = None
             if not variant:
                 continue
-            db.store_card(variant, source='catalog', game=progress.game)
+            db.store_card(variant, source='catalog', game=progress.game, commit=False)
             progress.stored += 1
             if progress.download_images:
-                existing_v = sorted(
-                    images_dir.glob(f"{variant['id']}-{progress.image_kind}.*"))
-                existing_v = [p for p in existing_v if not p.name.endswith('.part')]
+                existing_v = images.cached_image_path(
+                    images_dir, variant['id'], progress.image_kind)
                 if existing_v:
                     progress.images_skip += 1
                 else:
@@ -282,8 +283,7 @@ def _store_and_image(
     if not progress.download_images:
         _polite_sleep(CACHE_CARD_INTERVAL, watch)
         return
-    existing = sorted(images_dir.glob(f"{card['id']}-{progress.image_kind}.*"))
-    existing = [p for p in existing if not p.name.endswith('.part')]
+    existing = images.cached_image_path(images_dir, card['id'], progress.image_kind)
     if existing:
         progress.images_skip += 1
         _polite_sleep(CACHE_CARD_INTERVAL * 0.25, watch)
@@ -478,9 +478,14 @@ def _run_catalog(
                 _polite_sleep(CACHE_PAGE_INTERVAL, watch)
                 continue
             break
-        for card in cards:
-            watch.check()
-            _store_and_image(db, images_dir, card, progress, watch, print_fn)
+        try:
+            for card in cards:
+                watch.check()
+                _store_and_image(db, images_dir, card, progress, watch, print_fn)
+        finally:
+            # One commit per provider page keeps stops/errors durable without
+            # per-card WAL churn.
+            db.commit()
         if progress.game == 'riftbound':
             progress.offset += len(cards)
         else:
@@ -515,8 +520,8 @@ def _run_images_only(
         progress.offset += 1
         if not progress.download_images:
             continue
-        existing = sorted(images_dir.glob(f"{card['id']}-{progress.image_kind}.*"))
-        existing = [p for p in existing if not p.name.endswith('.part')]
+        existing = images.cached_image_path(
+            images_dir, card['id'], progress.image_kind)
         if existing:
             progress.images_skip += 1
         else:

@@ -50,6 +50,33 @@ class TestStoreAndLookup:
         names = {c['name'] for c in carddb.search_local('Lightning')}
         assert names == {'Lightning Bolt', 'Lightning Helix'}
 
+    def test_search_local_ranks_exact_and_prefix_first(self, carddb):
+        carddb.store_card(make_card('id-1', 'Greater Bolt', 'aaa', '1'))
+        carddb.store_card(make_card('id-2', 'Bolt', 'bbb', '2'))
+        carddb.store_card(make_card('id-3', 'Bolt of Ruin', 'ccc', '3'))
+        names = [c['name'] for c in carddb.search_local('Bolt')]
+        assert names == ['Bolt', 'Bolt of Ruin', 'Greater Bolt']
+
+    def test_search_local_substring_midword(self, carddb):
+        # FTS prefix tokens can't find mid-word fragments; LIKE fallback must
+        carddb.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42'))
+        assert [c['id'] for c in carddb.search_local('ightn')] == ['id-1']
+
+    def test_search_local_all_games(self, carddb):
+        carddb.store_card(make_card('mtg-1', 'Charizard Dragon', 'xyz', '1'))
+        pkm = make_card('pkm-1', 'Charizard', 'base1', '4')
+        pkm['game'] = 'pokemon'
+        carddb.store_card(pkm, game='pokemon')
+        ids = {c['id'] for c in carddb.search_local('charizard', game=None)}
+        assert ids == {'mtg-1', 'pkm-1'}
+        # Scoped search still isolates games
+        assert [c['id'] for c in carddb.search_local('charizard', game='pokemon')] == ['pkm-1']
+
+    def test_search_local_respects_limit(self, carddb):
+        for i in range(10):
+            carddb.store_card(make_card(f'id-{i}', f'Bolt Variant {i}', 'sta', str(i)))
+        assert len(carddb.search_local('Bolt', limit=5)) == 5
+
     def test_list_gallery_filters_and_pages(self, carddb):
         carddb.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42'))
         carddb.store_card(make_card('id-2', 'Sol Ring', 'c21', '125'))
@@ -66,6 +93,31 @@ class TestStoreAndLookup:
         page, total = carddb.list_gallery(limit=1, offset=0, sort='name')
         assert total == 3
         assert len(page) == 1
+
+    def test_list_gallery_returns_light_projection(self, carddb):
+        carddb.store_card(make_card('id-1', 'Sol Ring', 'c21', '125'))
+        cards, total = carddb.list_gallery()
+        assert total == 1
+        c = cards[0]
+        assert c['id'] == 'id-1'
+        assert c['name'] == 'Sol Ring'
+        assert c['set'] == 'c21'
+        assert c['collector_number'] == '125'
+        assert c['game'] == 'mtg'
+
+    def test_fts_index_survives_upsert_and_delete_rebuild(self, tmp_path):
+        # Existing DB without FTS gets backfilled on open
+        path = tmp_path / 'cards.db'
+        db = CardDB(path, offline=True)
+        db.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42'))
+        db.close()
+        db2 = CardDB(path, offline=True)
+        assert [c['id'] for c in db2.search_local('Lightning')] == ['id-1']
+        # Renames stay searchable under the new name only
+        renamed = make_card('id-1', 'Shock', 'sta', '42')
+        db2.store_card(renamed)
+        assert db2.search_local('Lightning') == []
+        assert [c['id'] for c in db2.search_local('Shock')] == ['id-1']
 
 
 class TestBulkImport:

@@ -86,6 +86,37 @@ class TestEnsureImage:
         with pytest.raises(ValueError):
             images.ensure_image(FakeSession(), _card_with_images(), 'huge', tmp_path)
 
+    def test_odd_uri_suffix_normalized(self, tmp_path):
+        # URIs with strange suffixes get the kind's canonical extension so
+        # deterministic cache lookups keep working.
+        session = FakeSession()
+        card = _card_with_images()
+        card['image_uris']['png'] = 'https://cards.example/img.php?id=1'
+        path = images.ensure_image(session, card, 'png', tmp_path)
+        assert path is not None and path.suffix == '.png'
+        assert images.ensure_image(session, card, 'png', tmp_path) == path
+        assert session.calls == 1
+
+
+class TestCachedImagePath:
+
+    def test_finds_any_known_extension(self, tmp_path):
+        (tmp_path / 'abc-png.webp').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'png') == tmp_path / 'abc-png.webp'
+
+    def test_prefers_kind_extension(self, tmp_path):
+        (tmp_path / 'abc-png.png').write_bytes(b'x')
+        (tmp_path / 'abc-png.jpg').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'png') == tmp_path / 'abc-png.png'
+
+    def test_ignores_partial_downloads(self, tmp_path):
+        (tmp_path / 'abc-png.png.part').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'png') is None
+
+    def test_missing_returns_none(self, tmp_path):
+        assert images.cached_image_path(tmp_path, 'abc', 'png') is None
+        assert images.cached_image_path(tmp_path, '', 'png') is None
+
 
 class TestSheetPdf:
 

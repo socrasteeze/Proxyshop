@@ -21,6 +21,24 @@ IMAGE_KINDS = {
     'border_crop': '.jpg',
 }
 
+# Extensions providers actually serve; checked in preference order so cache
+# lookups are a handful of stat() calls instead of scanning the whole dir.
+_CACHE_EXTS = ('.png', '.jpg', '.jpeg', '.webp')
+
+
+def cached_image_path(dest_dir: Path, card_id: str, kind: str) -> Optional[Path]:
+    """Return the already-downloaded image for a card/kind, if any."""
+    if not card_id:
+        return None
+    preferred = IMAGE_KINDS.get(kind)
+    exts = ((preferred,) if preferred else ()) + tuple(
+        e for e in _CACHE_EXTS if e != preferred)
+    for ext in exts:
+        p = dest_dir / f'{card_id}-{kind}{ext}'
+        if p.is_file():
+            return p
+    return None
+
 
 def image_uri(card: dict, kind: str) -> Optional[str]:
     """Resolve an image URI from a cached card object.
@@ -64,17 +82,19 @@ def ensure_image(
     card_id = card.get('id')
     if not card_id:
         return None
-    # Cached under any extension (providers serve png/jpg/webp variously)
-    cached = sorted(dest_dir.glob(f'{card_id}-{kind}.*'))
-    cached = [p for p in cached if not p.name.endswith('.part')]
+    # Cached under any known extension (providers serve png/jpg/webp variously)
+    cached = cached_image_path(dest_dir, card_id, kind)
     if cached:
-        return cached[0]
+        return cached
     if offline:
         return None
     uri = image_uri(card, kind)
     if not uri:
         return None
-    ext = Path(urlparse(uri).path).suffix.lower() or IMAGE_KINDS[kind]
+    ext = Path(urlparse(uri).path).suffix.lower()
+    if ext not in _CACHE_EXTS:
+        # Normalize odd/missing URI suffixes so cache lookups stay deterministic.
+        ext = IMAGE_KINDS[kind]
     path = dest_dir / f'{card_id}-{kind}{ext}'
     dest_dir.mkdir(parents=True, exist_ok=True)
     res = session.get(uri, stream=True)

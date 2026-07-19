@@ -1,10 +1,12 @@
 {% extends "base.html" %}
-{% block title %}{{ card.name }} — Proxyshop Web{% endblock %}
+{% block title %}{{ card.name }} — Proxyshop{% endblock %}
 {% block content %}
 
-<div class="grid2">
-  <div class="panel" style="text-align:center">
-    <img class="result" style="max-width:420px; width:100%"
+<p class="crumbs"><a href="/gallery">&larr; Back to card library</a></p>
+
+<div class="grid2 card-detail">
+  <div class="panel card-detail-image">
+    <img class="result" width="745" height="1040"
          src="/api/cards/{{ card.id }}/image?kind=png" alt="{{ card.name }}">
   </div>
 
@@ -25,21 +27,18 @@
         {% endif %}
       </tbody>
     </table>
-    <p style="margin-top:1rem" class="btn-row">
+    <p class="btn-row" style="margin-top:1rem">
       {% if game in ('mtg', 'pokemon', 'riftbound') %}
-      <a href="/?card_id={{ card.id }}"><button>Make / edit</button></a>
+      <a class="btn" href="/?card_id={{ card.id }}">Open in editor</a>
       {% endif %}
-      <a href="/api/cards/{{ card.id }}/image?kind=png" download><button class="btn-ghost">Download HQ scan</button></a>
+      <a class="btn btn-ghost" href="/api/cards/{{ card.id }}/image?kind=png" download>Download high-quality scan</a>
       {% if has_art_crop %}
-      <a href="/api/cards/{{ card.id }}/image?kind=art_crop" download>
-        <button class="btn-ghost">Download art crop</button></a>
+      <a class="btn btn-ghost" href="/api/cards/{{ card.id }}/image?kind=art_crop" download>Download art crop</a>
       {% endif %}
     </p>
     {% if game in ('mtg', 'pokemon', 'riftbound') %}
-    <p class="muted">Open in Make to swap art, edit text, preview Compose, or queue Photoshop.</p>
+    <p class="muted">The editor lets you swap art, edit text, preview the card, or render it in Photoshop.</p>
     {% endif %}
   </div>
 </div>
-
-<p><a href="javascript:history.back()">&larr; Back</a></p>
 {% endblock %}

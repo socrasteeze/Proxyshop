@@ -43,6 +43,8 @@ header {
   z-index: 40;
 }
 header h1 { font-size: 1.1rem; margin: 0; letter-spacing: .02em; }
+header h1 .brand { color: var(--text); }
+header h1 .brand:hover { text-decoration: none; color: var(--accent); }
 header nav { display: flex; gap: .35rem; flex-wrap: wrap; }
 header nav a {
   color: var(--muted);
@@ -55,6 +57,10 @@ header nav a:hover {
   color: var(--text);
   background: rgba(255, 255, 255, .05);
   text-decoration: none;
+}
+header nav a[aria-current="page"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 main {
   width: min(1280px, 100%);
@@ -124,11 +130,26 @@ button {
 }
 button:hover { filter: brightness(1.1); }
 button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+/* Anchor styled as a button — keeps HTML valid (no <a><button>> nesting). */
+a.btn {
+  display: inline-block;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  padding: .55rem 1rem;
+  text-decoration: none;
+  transition: filter .15s var(--ease);
+}
+a.btn:hover { filter: brightness(1.1); text-decoration: none; }
 .btn-ghost {
   background: #3a3d46;
   color: var(--text);
 }
 .btn-ghost:hover { filter: brightness(1.12); }
+a.btn.btn-ghost { background: #3a3d46; color: var(--text); }
 .btn-danger {
   background: transparent;
   color: var(--err);
@@ -237,9 +258,11 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 }
 .card-tile img {
   width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
   border-radius: 4.75% / 3.5%;
   background: #3a3d46;
-  min-height: 190px;
   transition: box-shadow .25s var(--ease);
 }
 .card-tile:hover img { box-shadow: var(--lift); }
@@ -277,6 +300,14 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
+.gallery-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  margin-top: 1.2rem;
+}
 .gallery-pager a { text-decoration: none; }
 .pager-btn {
   display: inline-block;
@@ -293,6 +324,62 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   background: #3a3d46;
   color: var(--text);
 }
+.pager-pages {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  flex-wrap: wrap;
+}
+.pager-num {
+  display: inline-block;
+  min-width: 2.2rem;
+  padding: .4rem .45rem;
+  text-align: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: .85rem;
+}
+.pager-num:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  text-decoration: none;
+}
+.pager-num--current {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.pager-gap { color: var(--muted); padding: 0 .1rem; }
+
+/* Card library filter toolbar — controls share one aligned baseline. */
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1.1fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(9rem, 1fr) auto;
+  gap: .7rem;
+  align-items: end;
+}
+.filter-bar > label { min-width: 0; }
+.filter-actions {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  padding-bottom: 1px;
+}
+.filter-actions .btn,
+.filter-actions button { white-space: nowrap; }
+@media (max-width: 1000px) {
+  .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filter-actions { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .filter-bar { grid-template-columns: 1fr; }
+}
+.gallery-chips { margin-top: .8rem; }
+.crumbs { margin: 0 0 .9rem; }
+.card-detail-image { text-align: center; }
+.card-detail-image img { max-width: 420px; width: 100%; }
 
 /* Typeahead */
 .typeahead { position: relative; width: 100%; }
@@ -669,3 +756,12 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   gap: .4rem;
 }
 .game-pills .job-chip { margin: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  html { scroll-behavior: auto; }
+}

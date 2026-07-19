@@ -1,25 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Card Search — Proxyshop Web{% endblock %}
+{% block title %}Search cards — Proxyshop{% endblock %}
 {% block content %}
 
 <div class="panel">
   <h2>Search cards</h2>
-  <p class="muted">{{ '{:,}'.format(stats.cards) }} cards cached
+  <p class="muted">{{ '{:,}'.format(stats.cards) }} cards in the local database
     {% if stats.bulk_imported_at %} · MTG bulk import {{ stats.bulk_imported_at }}{% endif %}
-    · results found online are cached automatically</p>
+    · results found online are saved locally automatically</p>
   <div class="picker-row">
     <label>Game
       <select name="game" id="search-game">
+        <option value="" {% if not game %}selected{% endif %}>All games (local database)</option>
         {% for g, label in games.items() %}
         <option value="{{ g }}" {% if g == game %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
     <label>Card name
-      <input id="search-q" name="q" value="{{ q }}" placeholder="Start typing…" autocomplete="off" minlength="2">
+      <input id="search-q" name="q" value="{{ q }}" placeholder="Type a card name…" autocomplete="off" minlength="2">
     </label>
   </div>
-  <p class="muted" style="margin-top:.7rem">Typeahead jumps to the card page. Or press Enter to browse a grid.</p>
+  <p class="muted" style="margin-top:.7rem">Selecting a suggestion opens the card page. Press Enter to show all matching cards.</p>
   <form id="search-form" action="/search" method="get" hidden>
     <input type="hidden" name="game" id="search-form-game" value="{{ game }}">
     <input type="hidden" name="q" id="search-form-q" value="{{ q }}">
@@ -30,15 +31,15 @@
      data-catalog-games="{{ catalog_games|join(',') }}"
      data-offline="{{ '1' if offline else '0' }}">
   <div class="panel-header">
-    <h2>Offline cache</h2>
+    <h2>Download to local cache</h2>
     <div class="btn-row">
-      <button type="button" id="cache-start">Download cards</button>
-      <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume</button>
-      <button type="button" class="btn-danger" id="cache-stop" hidden>Stop</button>
+      <button type="button" id="cache-start">Start download</button>
+      <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume download</button>
+      <button type="button" class="btn-danger" id="cache-stop" hidden>Stop download</button>
     </div>
   </div>
   <p class="muted">
-    Download matching <span data-cache-label></span> cards and HQ images onto this NAS.
+    Download matching <span data-cache-label></span> cards and high-quality images to this server.
     MTG and Pokémon need filters (set / type / art / …) so you don’t pull everything.
     Safe to stop and resume; requests are rate-limited.
   </p>
@@ -74,15 +75,15 @@
       <label>Extra Scryfall tags
         <input id="cf-mtg-tags" placeholder='otag:illustrated is:foil' autocomplete="off">
       </label>
-      <label>Custom q (advanced)
-        <input id="cf-mtg-q" placeholder="optional raw query fragment" autocomplete="off">
+      <label>Custom query (advanced)
+        <input id="cf-mtg-q" placeholder="optional raw Scryfall query fragment" autocomplete="off">
       </label>
     </div>
-    <label style="margin-top:.7rem;display:block">Image kind
+    <label style="margin-top:.7rem;display:block">Image quality
       <select id="cf-mtg-kind">
-        <option value="png">HQ scan (png)</option>
+        <option value="png">High-quality scan (PNG)</option>
         <option value="large">Large JPG</option>
-        <option value="art_crop">Art crop</option>
+        <option value="art_crop">Art-only crop</option>
       </select>
     </label>
   </div>
@@ -133,27 +134,27 @@
       <label>Name contains
         <input id="cf-pkm-name" placeholder="optional" autocomplete="off">
       </label>
-      <label>Custom q (advanced)
+      <label>Custom query (advanced)
         <input id="cf-pkm-q" placeholder="optional raw Lucene query" autocomplete="off">
       </label>
     </div>
   </div>
 
   <div id="cache-filters-small" class="cache-filters" hidden>
-    <p class="muted">Caches the full published catalog for this game.</p>
+    <p class="muted">Downloads the complete published catalog for this game.</p>
   </div>
 
   <p class="muted" id="cache-status" style="margin-top:.7rem">—</p>
 
   <details id="cache-log-wrap" class="cache-log-wrap">
-    <summary>Run log</summary>
+    <summary>Download log</summary>
     <pre id="cache-log" class="cache-log"></pre>
   </details>
 
   <details class="advanced-block cache-advanced">
-    <summary>Advanced</summary>
+    <summary>Advanced options</summary>
     <div class="btn-row">
-      <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start over from scratch</button>
+      <button type="button" class="btn-ghost" id="cache-fresh" hidden>Restart download (discard progress)</button>
     </div>
     <p class="muted" style="margin-top:.5rem">Discards the current checkpoint and restarts with the filters above.</p>
   </details>
@@ -161,21 +162,23 @@
 
 {% if q %}
 <div class="panel">
-  <h2>Results for “{{ q }}” <span class="pill">{{ games[game] }}</span></h2>
+  <h2>Results for “{{ q }}” <span class="pill">{{ games.get(game, 'All games') }}</span></h2>
   {% if error %}
   <p style="color: var(--err)">{{ error }}</p>
   {% endif %}
   {% if results and source != 'local' %}
-  <p class="muted">No local matches — fetched live and cached for next time.</p>
+  <p class="muted">No local matches — fetched online and saved for next time.</p>
   {% endif %}
   {% if results %}
   <div class="card-grid">
     {% for c in results %}
     {% set p = prices.get(c.id) %}
     <a class="card-tile" href="/card/{{ c.id }}">
-      <img loading="lazy" src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+      <img loading="lazy" width="336" height="468"
+           src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
       <span class="caption">{{ c.name }}<br>
         <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
+          {% if not game %} · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}{% endif %}
           {% if p and p.usd is not none %} · ${{ '%.2f'|format(p.usd) }}{% endif %}
         </span></span>
     </a>
@@ -183,7 +186,8 @@
   </div>
   {% else %}
   <p class="muted">
-    {% if offline %}No local matches (offline mode — live lookups are disabled).
+    {% if not game %}No matches in the local database — pick a specific game to search online.
+    {% elif offline %}No matches in the local database (offline mode — online search is disabled).
     {% else %}No matches locally or online — check the spelling.{% endif %}
   </p>
   {% endif %}
@@ -195,6 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const game = document.getElementById('search-game');
   const q = document.getElementById('search-q');
   const labels = {
+    '': 'All games',
     {% for g, label in games.items() %}'{{ g }}': {{ label|tojson }},{% endfor %}
   };
   const GAME_LS_KEY = 'proxyshop.search.game';
@@ -202,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!params.has('game')) {
     try {
       const saved = localStorage.getItem(GAME_LS_KEY);
-      if (saved && labels[saved]) game.value = saved;
+      if (saved !== null && saved in labels) game.value = saved;
     } catch (e) { /* private mode */ }
   }
   try {
@@ -382,17 +387,17 @@ document.addEventListener('DOMContentLoaded', () => {
   function formatStatus(body) {
     if (!body || body.status === 'idle') {
       return offline
-        ? 'Offline mode is on — caching needs a live provider.'
-        : 'Pick filters (for MTG/Pokémon), then cache. Progress is resumable.';
+        ? 'Offline mode is on — downloading needs a live provider.'
+        : 'Set filters (MTG / Pokémon), then start the download. You can stop and resume later.';
     }
     const parts = [
-      body.running ? 'Running' : (body.status || 'idle'),
-      `cards in DB: ${body.db_count ?? 0}`,
+      body.running ? 'Downloading' : (body.status || 'idle'),
+      `cards in database: ${body.db_count ?? 0}`,
     ];
     if (body.query_label) parts.push(`query: ${body.query_label}`);
     if (body.stored != null) parts.push(`stored this run: ${body.stored}`);
     if (body.images_ok != null) {
-      parts.push(`images ok/skip/fail: ${body.images_ok}/${body.images_skip}/${body.images_fail}`);
+      parts.push(`images downloaded/skipped/failed: ${body.images_ok}/${body.images_skip}/${body.images_fail}`);
     }
     if (body.total_hint) parts.push(`provider total ≈ ${body.total_hint}`);
     if (body.message) parts.push(body.message);
@@ -497,8 +502,8 @@ document.addEventListener('DOMContentLoaded', () => {
     filtPkm.hidden = g !== 'pokemon';
     filtSmall.hidden = !(g === 'riftbound' || g === 'union-arena');
     btnStart.textContent = (g === 'mtg' || g === 'pokemon')
-      ? 'Download cards'
-      : 'Download all cards';
+      ? 'Start download'
+      : 'Download entire catalog';
   }
 
   async function syncPanel() {
@@ -521,7 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnFresh.addEventListener('click', () => {
     const name = labels[game.value] || game.value;
     if (!confirm(
-      `Start over from scratch for ${name}?\n\n`
+      `Restart the ${name} download from scratch?\n\n`
       + 'This discards the current checkpoint and restarts the download with the filters above.'
     )) return;
     postCache('start', true);

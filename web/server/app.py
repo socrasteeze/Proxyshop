@@ -277,7 +277,17 @@ def page_gallery(
     counts = carddb.counts_by_game()
     pages = max(1, (total + per_page - 1) // per_page) if total else 1
     if page > pages:
+        # Out-of-range page (stale link / shrunk filter): clamp and re-query
+        # so the last page still shows cards instead of an empty grid.
         page = pages
+        cards, total = carddb.list_gallery(
+            game=game or None,
+            q=q,
+            set_code=set,
+            offset=(page - 1) * per_page,
+            limit=per_page,
+            sort=sort,
+        )
 
     def page_url(p: int) -> str:
         from urllib.parse import urlencode
@@ -290,6 +300,16 @@ def page_gallery(
             params['set'] = set
         return '/gallery?' + urlencode(params)
 
+    # Compact page-number window: 1 … (page±2) … last
+    nearby = [p for p in range(page - 2, page + 3) if 1 <= p <= pages]
+    page_links: list[int] = []
+    if pages > 1:
+        if 1 not in nearby:
+            page_links.append(1)
+        page_links.extend(nearby)
+        if pages not in nearby:
+            page_links.append(pages)
+
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,
         'q': q,
@@ -297,6 +317,7 @@ def page_gallery(
         'sort': sort,
         'page': page,
         'pages': pages,
+        'page_links': page_links,
         'cards': cards,
         'total': total,
         'total_all': sum(counts.values()),
@@ -352,9 +373,14 @@ def api_cards_gallery(
 def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], str]:
     """Local-first card search with live provider fallback (cache-through).
 
+    game='' (or 'all') searches every locally cached game with no live
+    fallback — cross-game fan-out to external providers is never done.
     MTG falls back to Scryfall; other games use their provider from
     web.shared.games. Fallback results are always cached locally.
     """
+    game = (game or '').strip().lower()
+    if game in ('', 'all'):
+        return carddb.search_local(q, limit=limit, game=None), 'local'
     if game not in games.GAMES:
         raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
     results = carddb.search_local(q, limit=limit, game=game)
@@ -380,6 +406,9 @@ def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], st
 
 @app.get('/search', response_class=HTMLResponse)
 def page_search(request: Request, q: str = '', game: str = 'mtg'):
+    game = (game or '').strip().lower()
+    if game == 'all':
+        game = ''
     results, source, error = [], 'local', None
     if len(q) >= 2:
         try:
@@ -814,7 +843,12 @@ def api_card_image(request: Request, card_id: str, kind: str = 'png'):
     safe = re.sub(r'[^-\w. \[\]{}()\']', '_', (
         f"{card.get('name', 'card')} [{(card.get('set') or '').upper()}] "
         f"{card.get('collector_number', '')}").strip())
-    return FileResponse(path, filename=f'{safe}{path.suffix}')
+    # Card scans never change for a given id+kind: let browsers cache them
+    # aggressively so grid pages don't re-request 60 thumbs per view.
+    return FileResponse(
+        path,
+        filename=f'{safe}{path.suffix}',
+        headers={'Cache-Control': 'public, max-age=31536000, immutable'})
 
 
 @app.post('/api/decks/import')

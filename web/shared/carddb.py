@@ -66,6 +66,8 @@ CREATE INDEX IF NOT EXISTS idx_cards_set_num ON cards (set_code, collector_numbe
 CREATE INDEX IF NOT EXISTS idx_cards_name ON cards (name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards (oracle_id);
 CREATE INDEX IF NOT EXISTS idx_cards_game ON cards (game, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_cards_game_set ON cards (game, set_code, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_cards_fetched ON cards (fetched_at);
 
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -96,6 +98,27 @@ CREATE TABLE IF NOT EXISTS deck_cards (
     board TEXT NOT NULL DEFAULT 'main'
 );
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards (deck_id);
+"""
+
+# Full-text name index. Kept separate from SCHEMA so databases on SQLite
+# builds without FTS5 still work (search falls back to LIKE scans).
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+    name,
+    content='cards',
+    content_rowid='rowid',
+    tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS cards_fts_ai AFTER INSERT ON cards BEGIN
+    INSERT INTO cards_fts (rowid, name) VALUES (new.rowid, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS cards_fts_ad AFTER DELETE ON cards BEGIN
+    INSERT INTO cards_fts (cards_fts, rowid, name) VALUES ('delete', old.rowid, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS cards_fts_au AFTER UPDATE OF name ON cards BEGIN
+    INSERT INTO cards_fts (cards_fts, rowid, name) VALUES ('delete', old.rowid, old.name);
+    INSERT INTO cards_fts (rowid, name) VALUES (new.rowid, new.name);
+END;
 """
 
 """
@@ -229,6 +252,7 @@ class CardDB:
             self._migrate(con)
             con.executescript(SCHEMA)
             con.execute('PRAGMA journal_mode=WAL')
+            self._fts = self._init_fts(con)
 
     @staticmethod
     def _migrate(con: sqlite3.Connection) -> None:
@@ -237,6 +261,28 @@ class CardDB:
         if cols and 'game' not in cols:
             con.execute("ALTER TABLE cards ADD COLUMN game TEXT NOT NULL DEFAULT 'mtg'")
             con.commit()
+
+    @staticmethod
+    def _init_fts(con: sqlite3.Connection) -> bool:
+        """Create (and backfill) the FTS5 name index; False when unsupported."""
+        existed = bool(con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cards_fts'"
+        ).fetchone())
+        try:
+            con.executescript(FTS_SCHEMA)
+        except sqlite3.OperationalError:
+            return False
+        if not existed:
+            # Existing rows predate the triggers: rebuild once on upgrade.
+            con.execute("INSERT INTO cards_fts (cards_fts) VALUES ('rebuild')")
+            con.commit()
+        return True
+
+    @staticmethod
+    def _fts_query(text: str) -> str:
+        """Build a prefix-match FTS5 query from free text ('ligh bol' style)."""
+        tokens = [t.replace('"', '""') for t in text.split() if t]
+        return ' '.join(f'"{t}"*' for t in tokens)
 
     @property
     def session(self) -> ScryfallSession:
@@ -259,6 +305,10 @@ class CardDB:
         if con is not None:
             con.close()
             self._local.con = None
+
+    def commit(self) -> None:
+        """Commit any pending writes on this thread's connection."""
+        self._conn().commit()
 
     """
     * Storage
@@ -477,7 +527,9 @@ class CardDB:
     ) -> tuple[list[dict], int]:
         """Browse locally cached cards (no network).
 
-        Returns (cards, total_matching).
+        Returns (cards, total_matching). Cards are lightweight projections
+        built from the denormalized columns (no per-row JSON parsing) — use
+        get_by_id() when the full provider object is needed.
         """
         con = self._conn()
         offset = max(int(offset), 0)
@@ -505,42 +557,125 @@ class CardDB:
         ).fetchone()['n']
         rows = con.execute(
             f"""
-            SELECT game, json FROM cards
+            SELECT id, name, set_code, collector_number, lang, released_at, game
+            FROM cards
             WHERE {clause}
             ORDER BY {order}
             LIMIT ? OFFSET ?
             """, (*params, limit, offset)).fetchall()
-        cards = []
-        for r in rows:
-            card = json.loads(r['json'])
-            card.setdefault('game', r['game'] or 'mtg')
-            cards.append(card)
+        cards = [{
+            'id': r['id'],
+            'name': r['name'],
+            'set': r['set_code'],
+            'collector_number': r['collector_number'],
+            'lang': r['lang'],
+            'released_at': r['released_at'],
+            'game': r['game'] or 'mtg',
+        } for r in rows]
         return cards, int(total)
 
-    def search_local(self, text: str, limit: int = 50, game: str = 'mtg') -> list[dict]:
-        """Substring name search against the local DB only (no network).
+    def search_local(
+        self,
+        text: str,
+        limit: int = 50,
+        game: Optional[str] = 'mtg',
+    ) -> list[dict]:
+        """Name search against the local DB only (no network).
 
-        Returns one row per printing, name-ordered then newest first.
-        MTG stays English-only; other games include all stored langs (e.g. JA).
+        Exact-name matches rank first, then prefix matches, then substring /
+        word matches. Pass game=None (or '') to search across every game.
+        Returns one row per printing. MTG stays English-only; other games
+        include all stored langs (e.g. JA).
         """
+        text = (text or '').strip()
+        if not text:
+            return []
         con = self._conn()
-        if game == 'mtg':
-            rows = con.execute(
-                """
-                SELECT json FROM cards
-                WHERE name LIKE ? COLLATE NOCASE AND lang='en' AND game=?
-                ORDER BY name COLLATE NOCASE ASC, released_at DESC
-                LIMIT ?
-                """, (f'%{text}%', game, int(limit))).fetchall()
+        limit = max(int(limit), 1)
+
+        scope = []
+        scope_params: list[Any] = []
+        if game:
+            scope.append('game=?')
+            scope_params.append(game)
+            if game == 'mtg':
+                scope.append("lang='en'")
         else:
-            rows = con.execute(
-                """
-                SELECT json FROM cards
-                WHERE name LIKE ? COLLATE NOCASE AND game=?
-                ORDER BY name COLLATE NOCASE ASC, released_at DESC
-                LIMIT ?
-                """, (f'%{text}%', game, int(limit))).fetchall()
-        return [json.loads(r['json']) for r in rows]
+            # Cross-game: keep MTG English-only, other games any lang.
+            scope.append("(game != 'mtg' OR lang='en')")
+        scope_clause = (' AND ' + ' AND '.join(scope)) if scope else ''
+
+        rank = """
+            CASE
+                WHEN name = ? COLLATE NOCASE THEN 0
+                WHEN name LIKE ? COLLATE NOCASE THEN 1
+                ELSE 2
+            END
+        """
+        rank_params = [text, f'{text}%']
+        order = f'{rank} ASC, name COLLATE NOCASE ASC, released_at DESC'
+
+        results: list[dict] = []
+        seen: set[str] = set()
+
+        # Fast path: FTS5 prefix-token match (word-boundary matches).
+        if getattr(self, '_fts', False):
+            match = self._fts_query(text)
+            if match:
+                try:
+                    rows = con.execute(
+                        f"""
+                        SELECT id, game, json FROM cards
+                        WHERE rowid IN (
+                            SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?
+                        ){scope_clause}
+                        ORDER BY {order}
+                        LIMIT ?
+                        """,
+                        (match, *scope_params, *rank_params, limit)).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+                for r in rows:
+                    seen.add(r['id'])
+                    card = json.loads(r['json'])
+                    card.setdefault('game', r['game'] or 'mtg')
+                    results.append(card)
+        if len(results) >= limit:
+            return results[:limit]
+
+        # Fallback / top-up: substring LIKE scan (covers mid-word matches).
+        rows = con.execute(
+            f"""
+            SELECT id, game, json FROM cards
+            WHERE name LIKE ? COLLATE NOCASE{scope_clause}
+            ORDER BY {order}
+            LIMIT ?
+            """,
+            (f'%{text}%', *scope_params, *rank_params, limit)).fetchall()
+        for r in rows:
+            if r['id'] in seen:
+                continue
+            card = json.loads(r['json'])
+            card.setdefault('game', r['game'] or 'mtg')
+            results.append(card)
+            if len(results) >= limit:
+                break
+
+        # Merge FTS and LIKE hits into one consistent ranking.
+        needle = text.lower()
+
+        def sort_key(card: dict) -> tuple:
+            name = str(card.get('name') or '').lower()
+            if name == needle:
+                tier = 0
+            elif name.startswith(needle):
+                tier = 1
+            else:
+                tier = 2
+            return tier, name, str(card.get('released_at') or '')
+
+        results.sort(key=sort_key)
+        return results[:limit]
 
     def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:
         """Name search against the live Scryfall API; results are cached.
