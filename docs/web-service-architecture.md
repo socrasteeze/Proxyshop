@@ -65,6 +65,10 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   Moxfield / Archidekt URL on the *Decks* page — every card is resolved
   (cache first, then Scryfall's batch endpoint at 75 cards per request) and
   saved as a named deck.
+- **Browser search with live fallback**: the *Card Search* page and the
+  render form's autocomplete search the local DB first and fall back to a
+  live Scryfall search when nothing matches — fallback results are cached,
+  so the database grows with every search.
 - Scryfall etiquette is built in: identifying User-Agent, ≥100ms between
   requests, honoring `429 Retry-After`, bulk files preferred over API calls.
 - Set `PROXYSHOP_OFFLINE=1` to forbid all live Scryfall calls.

@@ -355,6 +355,29 @@ class CardDB:
             """, (f'%{text}%', int(limit))).fetchall()
         return [json.loads(r['json']) for r in rows]
 
+    def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:
+        """Name search against the live Scryfall API; results are cached.
+
+        Used as the fallback when a local search comes up empty, so the local
+        database grows organically with every browser search. Returns [] when
+        offline, on error, or for no matches.
+        """
+        if self.offline:
+            return []
+        res = self.session.get(
+            f'{SCRYFALL_API}/cards/search',
+            params={'q': text, 'order': 'name'})
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        if data.get('object') == 'error':
+            return []
+        cards = [c for c in data.get('data', []) if c.get('object') == 'card'][:limit]
+        for card in cards:
+            self.store_card(card, commit=False)
+        self._conn().commit()
+        return cards
+
     """
     * Batch Resolution (deck imports)
     """

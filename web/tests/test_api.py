@@ -206,8 +206,39 @@ class TestDeckImport:
         assert client.post('/api/decks/import', data={}).status_code == 422
         assert client.post('/api/decks/import', data={'text': '// nothing'}).status_code == 422
 
-    def test_card_search_api(self, appmod, client):
+    def test_card_search_api_local(self, appmod, client):
         appmod.carddb.store_card(make_card('id-1', 'Lightning Bolt', 'sta', '42'))
-        hits = client.get('/api/cards/search', params={'q': 'light'}).json()
-        assert hits[0]['name'] == 'Lightning Bolt'
-        assert client.get('/api/cards/search', params={'q': 'x'}).json() == []
+        body = client.get('/api/cards/search', params={'q': 'light'}).json()
+        assert body['source'] == 'local'
+        assert body['cards'][0]['name'] == 'Lightning Bolt'
+        short = client.get('/api/cards/search', params={'q': 'x'}).json()
+        assert short == {'source': 'local', 'cards': []}
+
+    def test_card_search_offline_miss_stays_empty(self, client):
+        # Offline mode: no local match must NOT attempt a Scryfall call
+        body = client.get('/api/cards/search', params={'q': 'black lotus'}).json()
+        assert body['cards'] == []
+
+    def test_card_search_scryfall_fallback(self, appmod, client):
+        # Allow network path, stub the Scryfall session
+        appmod.carddb.offline = False
+
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return {'object': 'list',
+                        'data': [make_card('api-9', 'Black Lotus', 'lea', '232')]}
+
+        class FakeSession:
+            def get(self, url, **kwargs):
+                return FakeResponse()
+
+        appmod.carddb._session = FakeSession()
+        body = client.get('/api/cards/search', params={'q': 'black lotus'}).json()
+        assert body['source'] == 'scryfall'
+        assert body['cards'][0]['name'] == 'Black Lotus'
+        # Result was cached: subsequent search is local even with network off
+        appmod.carddb.offline = True
+        body2 = client.get('/api/cards/search', params={'q': 'black lotus'}).json()
+        assert body2['source'] == 'local'
+        assert body2['cards'][0]['name'] == 'Black Lotus'

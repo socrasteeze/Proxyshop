@@ -53,6 +53,30 @@ function wireAsyncForm(form, onSuccess) {
   });
 }
 
+/* Card-name autocomplete: debounced fetch into a <datalist>. Searches the
+   local card DB first, falling back to live Scryfall (cached server-side). */
+function wireCardAutocomplete(input, datalist) {
+  if (!input || !datalist) return;
+  let timer = null;
+  let lastQuery = '';
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 3 || q === lastQuery) return;
+    timer = setTimeout(async () => {
+      lastQuery = q;
+      try {
+        const res = await fetch(`/api/cards/search?q=${encodeURIComponent(q)}&limit=12`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const names = [...new Set(data.cards.map(c => c.name))];
+        datalist.innerHTML = names.map(n =>
+          `<option value="${n.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></option>`).join('');
+      } catch (e) { /* autocomplete is best-effort */ }
+    }, 300);
+  });
+}
+
 /* Give every submit form a fresh idempotency key per page load. */
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('input[name="idempotency_key"]').forEach(inp => {

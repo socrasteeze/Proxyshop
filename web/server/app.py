@@ -179,11 +179,21 @@ def page_decks(request: Request):
     })
 
 
+def _search_cards(q: str, limit: int) -> tuple[list[dict], str]:
+    """Local-first card search with live Scryfall fallback (cache-through)."""
+    results = carddb.search_local(q, limit=limit)
+    if results:
+        return results, 'local'
+    results = carddb.search_scryfall(q, limit=limit)
+    return results, 'scryfall'
+
+
 @app.get('/search', response_class=HTMLResponse)
 def page_search(request: Request, q: str = ''):
-    results = carddb.search_local(q, limit=60) if len(q) >= 2 else []
+    results, source = _search_cards(q, 60) if len(q) >= 2 else ([], 'local')
     return templates.TemplateResponse(request, 'search.html', {
-        'q': q, 'results': results, 'stats': carddb.stats()})
+        'q': q, 'results': results, 'source': source,
+        'offline': OFFLINE, 'stats': carddb.stats()})
 
 
 """
@@ -276,18 +286,22 @@ def api_templates(request: Request):
 
 @app.get('/api/cards/search')
 def api_card_search(request: Request, q: str, limit: int = 30):
+    """Card search: local DB first, live Scryfall fallback (results cached)."""
     rate_limit(request, 'api')
     if len(q) < 2:
-        return []
-    return [
-        {
-            'id': c.get('id'),
-            'name': c.get('name'),
-            'set': c.get('set'),
-            'collector_number': c.get('collector_number'),
-            'released_at': c.get('released_at'),
-        }
-        for c in carddb.search_local(q, limit=min(limit, 100))]
+        return {'source': 'local', 'cards': []}
+    results, source = _search_cards(q, min(limit, 100))
+    return {
+        'source': source,
+        'cards': [
+            {
+                'id': c.get('id'),
+                'name': c.get('name'),
+                'set': c.get('set'),
+                'collector_number': c.get('collector_number'),
+                'released_at': c.get('released_at'),
+            }
+            for c in results]}
 
 
 @app.post('/api/decks/import')

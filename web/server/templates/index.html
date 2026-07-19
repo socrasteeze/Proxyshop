@@ -6,7 +6,9 @@
     <h2>Render a card</h2>
     <form class="stack" id="submit-form" action="/api/jobs" method="post" enctype="multipart/form-data">
       <label>Card name
-        <input name="card_name" required maxlength="200" placeholder="Lightning Bolt" autocomplete="off">
+        <input name="card_name" required maxlength="200" placeholder="Lightning Bolt"
+               autocomplete="off" list="card-names" id="card-name-input">
+        <datalist id="card-names"></datalist>
       </label>
       <div style="display:flex; gap:.7rem;">
         <label style="flex:1">Set code <span class="muted">(optional)</span>
@@ -88,6 +90,9 @@ document.addEventListener('DOMContentLoaded', () => {
   wireAsyncForm(document.getElementById('submit-form'), (data) => {
     location.href = `/jobs/${data.id}`;
   });
+  wireCardAutocomplete(
+    document.getElementById('card-name-input'),
+    document.getElementById('card-names'));
 });
 </script>
 {% endblock %}

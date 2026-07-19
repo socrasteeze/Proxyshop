@@ -17,6 +17,9 @@
 {% if q %}
 <div class="panel">
   <h2>Results for “{{ q }}”</h2>
+  {% if results and source == 'scryfall' %}
+  <p class="muted">No local matches — fetched live from Scryfall and cached for next time.</p>
+  {% endif %}
   <table>
     <thead><tr><th>Name</th><th>Set</th><th>#</th><th>Released</th></tr></thead>
     <tbody>
@@ -28,8 +31,10 @@
         <td class="muted">{{ c.released_at }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="muted">No local matches.
-        {% if not stats.bulk_imported_at %}Try a deck import or bulk import first.{% endif %}</td></tr>
+      <tr><td colspan="4" class="muted">
+        {% if offline %}No local matches (offline mode — live Scryfall lookups are disabled).
+        {% else %}No matches locally or on Scryfall — check the spelling.{% endif %}
+      </td></tr>
       {% endfor %}
     </tbody>
   </table>
