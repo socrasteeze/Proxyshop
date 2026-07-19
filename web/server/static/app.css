@@ -70,8 +70,8 @@ main {
   animation: fadeUp .45s var(--ease) both;
 }
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .panel {
   background: var(--panel);
@@ -531,21 +531,25 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   background: color-mix(in srgb, var(--accent) 75%, #000);
 }
 
-/* Card popover modal */
+/* Card popover modal — must be a direct body child (see base.html). */
 .card-modal[hidden] { display: none !important; }
 .card-modal {
   position: fixed;
   inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 1rem;
+  pointer-events: none;
 }
 .card-modal-backdrop {
   position: absolute;
   inset: 0;
+  z-index: 0;
   background: rgba(0, 0, 0, .62);
   backdrop-filter: blur(3px);
+  pointer-events: auto;
 }
 .card-modal-dialog {
   position: relative;
@@ -556,9 +560,10 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: var(--lift);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .55);
   padding: 1rem 1.15rem 1.2rem;
   animation: dropIn .2s var(--ease);
+  pointer-events: auto;
 }
 .card-modal-header {
   display: flex;

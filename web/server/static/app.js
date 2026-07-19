@@ -497,18 +497,25 @@ function wireCacheBadge() {
 /**
  * In-place card popover: intercept .js-card-preview clicks, fetch detail JSON,
  * keep scroll position when closed. Falls back to full page navigation if JS
- * or the API fails.
+ * or the API fails. Modal lives on <body> (base.html) so fixed positioning
+ * isn't trapped by <main>'s transform animation.
  */
 function wireCardPopover(root = document) {
   const modal = document.getElementById('card-modal');
   const body = document.getElementById('card-modal-body');
   const title = document.getElementById('card-modal-title');
+  const closeBtn = modal && modal.querySelector('.card-modal-close');
   if (!modal || !body || !title) return;
+  if (modal.dataset.wired === '1') return;
+  modal.dataset.wired = '1';
 
   let lastFocus = null;
   let abort = null;
+  let openedAt = 0;
 
-  function close() {
+  function close(force) {
+    // Ignore accidental backdrop clicks from the same gesture that opened us.
+    if (!force && Date.now() - openedAt < 280) return;
     modal.hidden = true;
     document.body.classList.remove('modal-open');
     if (abort) { abort.abort(); abort = null; }
@@ -571,11 +578,14 @@ function wireCardPopover(root = document) {
 
   async function open(cardId, trigger) {
     lastFocus = trigger || document.activeElement;
+    openedAt = Date.now();
     modal.hidden = false;
     document.body.classList.add('modal-open');
     title.textContent = 'Loading…';
     body.innerHTML = '<p class="muted">Loading…</p>';
-    modal.querySelector('[data-modal-close]')?.focus?.();
+    if (closeBtn) {
+      try { closeBtn.focus(); } catch (e) { /* ignore */ }
+    }
     if (abort) abort.abort();
     abort = new AbortController();
     try {
@@ -594,7 +604,7 @@ function wireCardPopover(root = document) {
   const scope = root || document;
   scope.addEventListener('click', (ev) => {
     const link = ev.target.closest('.js-card-preview');
-    if (!link || !scope.contains(link)) return;
+    if (!link) return;
     const id = link.getAttribute('data-card-id');
     if (!id) return;
     // Allow modified clicks (new tab) to navigate normally.
@@ -603,13 +613,21 @@ function wireCardPopover(root = document) {
     open(id, link);
   });
 
-  modal.querySelectorAll('[data-modal-close]').forEach((el) => {
-    el.addEventListener('click', close);
-  });
+  // Backdrop closes the modal; Close button always works; dialog content does not.
+  const backdrop = modal.querySelector('.card-modal-backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', () => close(false));
+  }
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      close(true);
+    });
+  }
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && !modal.hidden) {
       ev.preventDefault();
-      close();
+      close(true);
     }
   });
 }
@@ -621,4 +639,5 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   wireJobDeleteButtons();
   wireCacheBadge();
+  wireCardPopover(document);
 });

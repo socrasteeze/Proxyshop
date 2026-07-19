@@ -170,19 +170,6 @@
   {% endif %}
 </div>
 
-<div class="card-modal" id="card-modal" hidden aria-modal="true" role="dialog" aria-labelledby="card-modal-title">
-  <div class="card-modal-backdrop" data-modal-close tabindex="-1"></div>
-  <div class="card-modal-dialog" role="document">
-    <div class="card-modal-header">
-      <h2 id="card-modal-title">Card</h2>
-      <button type="button" class="card-modal-close" data-modal-close aria-label="Close">Close</button>
-    </div>
-    <div class="card-modal-body" id="card-modal-body">
-      <p class="muted">Loading…</p>
-    </div>
-  </div>
-</div>
-
 <script>
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('gallery-form');
@@ -228,10 +215,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   } catch (e) { /* private mode */ }
-
-  if (typeof wireCardPopover === 'function') {
-    wireCardPopover(document.getElementById('gallery-grid'));
-  }
 });
 </script>
 {% endblock %}
