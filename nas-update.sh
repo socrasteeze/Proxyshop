@@ -25,6 +25,8 @@ PORT="8000:8000"                            # host:container
 CONTAINER_USER="0:0"                        # match owning uid:gid of your mounts (ls -n)
 DATA_DIR="/Volume1/proxyshop/data"          # TerraMaster: /Volume1 (capital V!)
 WORKER_TOKEN_FILE="$HOME/.proxyshop-worker-token"  # server<->worker shared secret
+APITCG_KEY_FILE="$HOME/.proxyshop-apitcg-key"          # Union Arena (free key: apitcg.com)
+POKEMONTCG_KEY_FILE="$HOME/.proxyshop-pokemontcg-key"  # optional (raises pokemontcg.io limits)
 # --------------------------
 
 # --- self-overwrite guard: keep verbatim -----------------------------------
@@ -94,6 +96,12 @@ if [ ! -f "$WORKER_TOKEN_FILE" ]; then
 fi
 mkdir -p "$DATA_DIR"
 
+# Provider API keys — optional files, empty means "no key" to the app
+APITCG_KEY="$(cat "$APITCG_KEY_FILE" 2>/dev/null || true)"
+POKEMONTCG_KEY="$(cat "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
+[ -n "$APITCG_KEY" ] && echo "==> Union Arena API key: found" \
+                     || echo "==> Union Arena API key: none (Union Arena search disabled)"
+
 if [ -n "${DRY_RUN:-}" ]; then
   echo "==> DRY_RUN set — skipping docker build/run/verify. Install complete."
   exit 0
@@ -112,6 +120,8 @@ docker run -d --name "$APP_NAME" --restart unless-stopped \
   -e PROXYSHOP_WORKER_TOKEN="$(cat "$WORKER_TOKEN_FILE")" \
   -e PROXYSHOP_OFFLINE=0 \
   -e PROXYSHOP_MAX_UPLOAD_MB=50 \
+  -e PROXYSHOP_APITCG_KEY="$APITCG_KEY" \
+  -e PROXYSHOP_POKEMONTCG_KEY="$POKEMONTCG_KEY" \
   -v "$DATA_DIR":/data \
   "$APP_NAME:latest"
 
@@ -124,6 +134,10 @@ while [ $i -lt 15 ]; do
     echo "==> OK: $APP_NAME is up — http://<nas>:$HOST_PORT"
     echo "    First deploy? Import the card database once:"
     echo "    docker exec $APP_NAME python -m web.server.manage bulk-download"
+    if [ -z "$APITCG_KEY" ]; then
+      echo "    Union Arena search needs a free apitcg.com key:"
+      echo "    echo '<key>' > $APITCG_KEY_FILE  (then re-run this script)"
+    fi
     exit 0
   fi
   i=$((i + 1))

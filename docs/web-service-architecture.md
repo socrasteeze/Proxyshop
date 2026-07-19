@@ -169,6 +169,20 @@ The first run generates the worker token at `~/.proxyshop-worker-token`
 (`/Volume1/proxyshop/data`, bind-mounted as `/data`), installs the code to
 `~/proxyshop-web`, and starts the container.
 
+**Provider API keys** live in `$HOME` files (never in the code tree — the
+script overwrites itself on update). Create them once, then re-run the
+update script so the container restarts with them:
+
+```sh
+# Union Arena search (free key from https://apitcg.com):
+echo '<your apitcg key>' > ~/.proxyshop-apitcg-key
+chmod 600 ~/.proxyshop-apitcg-key
+# Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):
+echo '<your pokemontcg key>' > ~/.proxyshop-pokemontcg-key
+chmod 600 ~/.proxyshop-pokemontcg-key
+sh ~/proxyshop-web/nas-update.sh
+```
+
 After that, refresh from your Windows desktop with one command —
 `nas-refresh.bat` (edit `NAS_HOST` at the top once; add an SSH key for a
 passwordless run):
