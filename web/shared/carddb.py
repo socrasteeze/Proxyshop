@@ -425,6 +425,39 @@ class CardDB:
             'SELECT json FROM cards WHERE id=?', (card_id,)).fetchone()
         return json.loads(row['json']) if row else None
 
+    def iter_by_game(
+        self,
+        game: str,
+        *,
+        offset: int = 0,
+        batch: int = 200,
+    ) -> Iterator[dict]:
+        """Yield cached card objects for a game, ordered by id (stable resume)."""
+        con = self._conn()
+        offset = max(int(offset), 0)
+        batch = max(int(batch), 1)
+        while True:
+            rows = con.execute(
+                """
+                SELECT json FROM cards
+                WHERE game=?
+                ORDER BY id ASC
+                LIMIT ? OFFSET ?
+                """, (game, batch, offset)).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                yield json.loads(row['json'])
+            offset += len(rows)
+            if len(rows) < batch:
+                break
+
+    def count_by_game(self, game: str) -> int:
+        """Return how many cards are stored for a game."""
+        row = self._conn().execute(
+            'SELECT COUNT(*) AS n FROM cards WHERE game=?', (game,)).fetchone()
+        return int(row['n']) if row else 0
+
     def search_local(self, text: str, limit: int = 50, game: str = 'mtg') -> list[dict]:
         """Substring name search against the local DB only (no network).
 

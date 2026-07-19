@@ -1,0 +1,420 @@
+"""
+* Full-catalog cache for small TCGs (Riftbound, Union Arena)
+* Stores provider cards into the local SQLite DB and optionally downloads
+* HQ images under /data/images/. Checkpoints progress so NAS runs can stop
+* and resume safely.
+* Must never import from `src/`.
+"""
+# Standard Library Imports
+import json
+import os
+import signal
+import time
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from typing import Optional
+
+# Local Imports
+from web.shared import games, images
+from web.shared.carddb import CardDB
+
+STOP_SUFFIX = '.stop'
+CHECKPOINT_VERSION = 1
+
+# Extra pacing on top of provider throttling — keeps bulk cache polite.
+# Override via env (seconds). Defaults are intentionally conservative.
+CACHE_PAGE_INTERVAL = float(os.environ.get('PROXYSHOP_CACHE_PAGE_INTERVAL', '0.75'))
+CACHE_CARD_INTERVAL = float(os.environ.get('PROXYSHOP_CACHE_CARD_INTERVAL', '0.4'))
+CACHE_IMAGE_INTERVAL = float(os.environ.get('PROXYSHOP_CACHE_IMAGE_INTERVAL', '0.4'))
+# While a full-catalog run is active, slow the shared provider limiter a bit more.
+CACHE_PROVIDER_INTERVAL = float(os.environ.get('PROXYSHOP_CACHE_PROVIDER_INTERVAL', '0.35'))
+
+
+@dataclass
+class CacheProgress:
+    version: int = CHECKPOINT_VERSION
+    game: str = ''
+    mode: str = 'catalog'          # catalog | images-only
+    status: str = 'running'        # running | stopped | done
+    offset: int = 0                # catalog offset or DB offset
+    page_size: int = 50
+    page: int = 1                  # 1-based (Union Arena)
+    total_hint: Optional[int] = None
+    stored: int = 0
+    images_ok: int = 0
+    images_fail: int = 0
+    images_skip: int = 0
+    hydrate: bool = True
+    download_images: bool = True
+    image_kind: str = 'png'
+    updated_at: str = ''
+    message: str = ''
+
+    def touch(self, message: str = '') -> None:
+        self.updated_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        if message:
+            self.message = message
+
+
+class StopRequested(Exception):
+    """Raised when the operator asks the cache run to stop."""
+
+
+def checkpoint_path(runs_dir: Path, game: str) -> Path:
+    return runs_dir / f'{game}.json'
+
+
+def stop_path(runs_dir: Path, game: str) -> Path:
+    return runs_dir / f'{game}{STOP_SUFFIX}'
+
+
+def load_checkpoint(path: Path) -> Optional[CacheProgress]:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    known = {f.name for f in fields(CacheProgress)}
+    filtered = {k: v for k, v in data.items() if k in known}
+    return CacheProgress(**filtered)
+
+
+def save_checkpoint(path: Path, progress: CacheProgress) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    progress.touch()
+    tmp = path.with_suffix(path.suffix + '.part')
+    tmp.write_text(
+        json.dumps(asdict(progress), indent=2, sort_keys=True) + '\n',
+        encoding='utf-8')
+    tmp.replace(path)
+
+
+def request_stop(runs_dir: Path, game: str) -> Path:
+    """Create the stop flag checked by a running cache-game process."""
+    path = stop_path(runs_dir, game)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('stop\n', encoding='utf-8')
+    return path
+
+
+def clear_stop(runs_dir: Path, game: str) -> None:
+    stop_path(runs_dir, game).unlink(missing_ok=True)
+
+
+def reset_checkpoint(runs_dir: Path, game: str) -> None:
+    checkpoint_path(runs_dir, game).unlink(missing_ok=True)
+    clear_stop(runs_dir, game)
+
+
+class _StopWatch:
+    """Cooperative stop via stop-flag file, and optionally SIGINT/SIGTERM (CLI)."""
+
+    def __init__(self, runs_dir: Path, game: str, *, use_signals: bool = True):
+        self.runs_dir = runs_dir
+        self.game = game
+        self.use_signals = use_signals
+        self._flag = False
+        self._prev_int = None
+        self._prev_term = None
+
+    def __enter__(self) -> '_StopWatch':
+        clear_stop(self.runs_dir, self.game)
+        if not self.use_signals:
+            return self
+
+        def _handler(signum, frame):  # noqa: ARG001
+            self._flag = True
+            print(f'\n==> Stop signal received ({signum}); finishing current card…')
+
+        self._prev_int = signal.getsignal(signal.SIGINT)
+        self._prev_term = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        if self.use_signals and self._prev_int is not None:
+            signal.signal(signal.SIGINT, self._prev_int)
+            signal.signal(signal.SIGTERM, self._prev_term)
+
+    def check(self) -> None:
+        if self._flag or stop_path(self.runs_dir, self.game).is_file():
+            raise StopRequested('stop requested')
+
+
+def progress_dict(progress: Optional[CacheProgress], *, db_count: int = 0, running: bool = False) -> dict:
+    """JSON-serializable status payload for CLI/API/UI."""
+    if not progress:
+        return {
+            'game': None,
+            'status': 'idle',
+            'running': False,
+            'db_count': db_count,
+        }
+    return {
+        'game': progress.game,
+        'status': 'running' if running else progress.status,
+        'running': running,
+        'mode': progress.mode,
+        'offset': progress.offset,
+        'page': progress.page,
+        'total_hint': progress.total_hint,
+        'stored': progress.stored,
+        'images_ok': progress.images_ok,
+        'images_skip': progress.images_skip,
+        'images_fail': progress.images_fail,
+        'updated_at': progress.updated_at,
+        'message': progress.message,
+        'db_count': db_count,
+    }
+
+
+def _polite_sleep(seconds: float, watch: Optional['_StopWatch'] = None) -> None:
+    """Sleep in short chunks so stop requests are noticed quickly."""
+    if seconds <= 0:
+        return
+    end = time.monotonic() + seconds
+    while True:
+        if watch is not None:
+            watch.check()
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
+
+
+def _fetch_catalog_page(
+    game: str,
+    progress: CacheProgress,
+) -> tuple[list[dict], Optional[int]]:
+    if game == 'riftbound':
+        return games.list_riftbound_page(
+            offset=progress.offset,
+            limit=progress.page_size,
+            hydrate=progress.hydrate)
+    if game == 'union-arena':
+        return games.list_union_arena_page(
+            page=progress.page,
+            limit=progress.page_size)
+    raise games.ProviderError(f'No catalog provider for game {game!r}')
+
+
+def _store_and_image(
+    db: CardDB,
+    images_dir: Path,
+    card: dict,
+    progress: CacheProgress,
+    watch: Optional['_StopWatch'] = None,
+) -> None:
+    db.store_card(card, source='catalog', game=progress.game)
+    progress.stored += 1
+    if not progress.download_images:
+        _polite_sleep(CACHE_CARD_INTERVAL, watch)
+        return
+    existing = sorted(images_dir.glob(f"{card['id']}-{progress.image_kind}.*"))
+    existing = [p for p in existing if not p.name.endswith('.part')]
+    if existing:
+        progress.images_skip += 1
+        _polite_sleep(CACHE_CARD_INTERVAL * 0.25, watch)
+        return
+    _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
+    path = images.ensure_image(
+        db.session, card, progress.image_kind, images_dir, offline=False)
+    if path:
+        progress.images_ok += 1
+    else:
+        progress.images_fail += 1
+    _polite_sleep(CACHE_CARD_INTERVAL, watch)
+
+
+def run_cache_game(
+    *,
+    db: CardDB,
+    game: str,
+    images_dir: Path,
+    runs_dir: Path,
+    download_images: bool = True,
+    hydrate: bool = True,
+    image_kind: str = 'png',
+    page_size: int = 50,
+    images_only: bool = False,
+    fresh: bool = False,
+    use_signals: bool = True,
+    print_fn=print,
+) -> CacheProgress:
+    """Cache a TCG catalog (+ images) with stop/resume support."""
+    if game not in games.CATALOG_GAMES:
+        raise ValueError(
+            f'Unsupported game {game!r}; choose from: '
+            + ', '.join(games.CATALOG_GAMES))
+    if image_kind not in images.IMAGE_KINDS:
+        raise ValueError(f'Unknown image kind {image_kind!r}')
+
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    ck_path = checkpoint_path(runs_dir, game)
+
+    if fresh:
+        reset_checkpoint(runs_dir, game)
+
+    progress = load_checkpoint(ck_path)
+    if progress and progress.status == 'done' and not fresh:
+        print_fn(f'==> {game}: previous run already done. Use --fresh to start over.')
+        return progress
+
+    if progress is None or fresh:
+        progress = CacheProgress(
+            game=game,
+            mode='images-only' if images_only else 'catalog',
+            page_size=page_size,
+            hydrate=hydrate,
+            download_images=download_images,
+            image_kind=image_kind,
+        )
+    else:
+        # Resume: keep counters/offset; refresh operator options
+        progress.mode = 'images-only' if images_only else progress.mode
+        if images_only:
+            progress.mode = 'images-only'
+        progress.hydrate = hydrate
+        progress.download_images = download_images
+        progress.image_kind = image_kind
+        progress.page_size = page_size
+        progress.status = 'running'
+        print_fn(
+            f'==> Resuming {game} from '
+            f'{"page " + str(progress.page) if game == "union-arena" and progress.mode == "catalog" else "offset " + str(progress.offset)} '
+            f'(stored={progress.stored}, images_ok={progress.images_ok})')
+
+    progress.touch('starting')
+    save_checkpoint(ck_path, progress)
+
+    prev_provider = games._provider_limiter.min_interval
+    prev_image = getattr(db.session, '_min_interval', None)
+    games._provider_limiter.set_interval(max(prev_provider, CACHE_PROVIDER_INTERVAL))
+    if prev_image is not None:
+        db.session._min_interval = max(prev_image, CACHE_IMAGE_INTERVAL)
+
+    try:
+        with _StopWatch(runs_dir, game, use_signals=use_signals) as watch:
+            if progress.mode == 'images-only':
+                _run_images_only(db, images_dir, progress, watch, print_fn)
+            else:
+                _run_catalog(db, images_dir, progress, watch, print_fn)
+            progress.status = 'done'
+            progress.touch('complete')
+            save_checkpoint(ck_path, progress)
+            clear_stop(runs_dir, game)
+            print_fn(
+                f'==> Done {game}: stored={progress.stored} '
+                f'images_ok={progress.images_ok} skip={progress.images_skip} '
+                f'fail={progress.images_fail}')
+    except StopRequested as e:
+        progress.status = 'stopped'
+        progress.touch(str(e))
+        save_checkpoint(ck_path, progress)
+        clear_stop(runs_dir, game)
+        print_fn(
+            f'==> Stopped {game} at '
+            f'{"page " + str(progress.page) if game == "union-arena" and progress.mode == "catalog" else "offset " + str(progress.offset)}. '
+            f'Re-run the same command to resume.')
+    except Exception as e:
+        progress.status = 'stopped'
+        progress.touch(f'error: {e}')
+        save_checkpoint(ck_path, progress)
+        clear_stop(runs_dir, game)
+        raise
+    finally:
+        games._provider_limiter.set_interval(prev_provider)
+        if prev_image is not None:
+            db.session._min_interval = prev_image
+    return progress
+
+
+def _run_catalog(
+    db: CardDB,
+    images_dir: Path,
+    progress: CacheProgress,
+    watch: _StopWatch,
+    print_fn,
+) -> None:
+    empty_pages = 0
+    while True:
+        watch.check()
+        cards, total = _fetch_catalog_page(progress.game, progress)
+        if total is not None:
+            progress.total_hint = total
+        if not cards:
+            empty_pages += 1
+            # Union Arena page APIs may return empty before we know we're done
+            if progress.game == 'union-arena' and empty_pages < 2:
+                progress.page += 1
+                save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
+                _polite_sleep(CACHE_PAGE_INTERVAL, watch)
+                continue
+            break
+        empty_pages = 0
+        for card in cards:
+            watch.check()
+            _store_and_image(db, images_dir, card, progress, watch)
+        if progress.game == 'riftbound':
+            progress.offset += len(cards)
+            if progress.total_hint is not None and progress.offset >= progress.total_hint:
+                break
+            if len(cards) < progress.page_size:
+                break
+        else:
+            progress.page += 1
+            if len(cards) < progress.page_size:
+                break
+        save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
+        label = (
+            f'offset={progress.offset}'
+            if progress.game == 'riftbound'
+            else f'page={progress.page - 1}')
+        total_bit = f'/{progress.total_hint}' if progress.total_hint else ''
+        print_fn(
+            f'… {progress.game} {label}{total_bit} '
+            f'stored={progress.stored} images_ok={progress.images_ok}')
+        _polite_sleep(CACHE_PAGE_INTERVAL, watch)
+
+
+def _run_images_only(
+    db: CardDB,
+    images_dir: Path,
+    progress: CacheProgress,
+    watch: _StopWatch,
+    print_fn,
+) -> None:
+    total = db.count_by_game(progress.game)
+    progress.total_hint = total
+    processed = 0
+    for card in db.iter_by_game(progress.game, offset=progress.offset, batch=100):
+        watch.check()
+        processed += 1
+        progress.offset += 1
+        if not progress.download_images:
+            continue
+        existing = sorted(images_dir.glob(f"{card['id']}-{progress.image_kind}.*"))
+        existing = [p for p in existing if not p.name.endswith('.part')]
+        if existing:
+            progress.images_skip += 1
+        else:
+            _polite_sleep(CACHE_IMAGE_INTERVAL, watch)
+            path = images.ensure_image(
+                db.session, card, progress.image_kind, images_dir, offline=False)
+            if path:
+                progress.images_ok += 1
+            else:
+                progress.images_fail += 1
+            _polite_sleep(CACHE_CARD_INTERVAL, watch)
+        if processed % 25 == 0:
+            save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
+            print_fn(
+                f'… {progress.game} images {progress.offset}/{total} '
+                f'ok={progress.images_ok} skip={progress.images_skip} '
+                f'fail={progress.images_fail}')
+    save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)

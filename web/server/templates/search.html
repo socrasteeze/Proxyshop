@@ -26,6 +26,24 @@
   </form>
 </div>
 
+<div class="panel" id="cache-panel" hidden
+     data-catalog-games="{{ catalog_games|join(',') }}"
+     data-offline="{{ '1' if offline else '0' }}">
+  <h2>Offline cache</h2>
+  <p class="muted">
+    Download the full <span data-cache-label></span> catalog and HQ images into this NAS.
+    Safe to stop and resume later. Requests are rate-limited so providers are less
+    likely to block this NAS IP.
+  </p>
+  <div class="btn-row">
+    <button type="button" id="cache-start">Cache all cards</button>
+    <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume</button>
+    <button type="button" class="btn-danger" id="cache-stop" hidden>Stop</button>
+    <button type="button" class="btn-ghost" id="cache-fresh" hidden>Start over</button>
+  </div>
+  <p class="muted" id="cache-status" style="margin-top:.7rem">—</p>
+</div>
+
 {% if q %}
 <div class="panel">
   <h2>Results for “{{ q }}” <span class="pill">{{ games[game] }}</span></h2>
@@ -61,13 +79,15 @@
 document.addEventListener('DOMContentLoaded', () => {
   const game = document.getElementById('search-game');
   const q = document.getElementById('search-q');
+  const labels = {
+    {% for g, label in games.items() %}'{{ g }}': {{ label|tojson }},{% endfor %}
+  };
   wireCardTypeahead(q, {
     getGame: () => game.value,
     onSelect: (card) => { location.href = `/card/${encodeURIComponent(card.id)}`; },
   });
   q.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter') return;
-    // Allow Enter to submit grid search when dropdown is closed
     const drop = q.closest('.typeahead')?.querySelector('.typeahead-drop');
     if (drop && !drop.hidden) return;
     ev.preventDefault();
@@ -75,6 +95,107 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search-form-q').value = q.value.trim();
     document.getElementById('search-form').submit();
   });
+
+  const panel = document.getElementById('cache-panel');
+  const catalog = (panel.dataset.catalogGames || '').split(',').filter(Boolean);
+  const offline = panel.dataset.offline === '1';
+  const statusEl = document.getElementById('cache-status');
+  const btnStart = document.getElementById('cache-start');
+  const btnResume = document.getElementById('cache-resume');
+  const btnStop = document.getElementById('cache-stop');
+  const btnFresh = document.getElementById('cache-fresh');
+  const labelEl = panel.querySelector('[data-cache-label]');
+  let pollTimer = null;
+
+  function formatStatus(body) {
+    if (!body || body.status === 'idle') {
+      return offline
+        ? 'Offline mode is on — caching needs a live provider.'
+        : 'Not started yet. Caching stores card data and HQ images for offline use.';
+    }
+    const parts = [
+      body.running ? 'Running' : (body.status || 'idle'),
+      `cards in DB: ${body.db_count ?? 0}`,
+    ];
+    if (body.stored != null) parts.push(`stored this run: ${body.stored}`);
+    if (body.images_ok != null) {
+      parts.push(`images ok/skip/fail: ${body.images_ok}/${body.images_skip}/${body.images_fail}`);
+    }
+    if (body.total_hint) parts.push(`provider total ≈ ${body.total_hint}`);
+    if (body.message) parts.push(body.message);
+    if (body.error) parts.push(`error: ${body.error}`);
+    return parts.join(' · ');
+  }
+
+  function applyButtons(body) {
+    const running = !!(body && body.running);
+    const stopped = body && body.status === 'stopped';
+    const done = body && body.status === 'done';
+    btnStart.hidden = running || stopped || done;
+    btnResume.hidden = !(stopped && !running);
+    btnStop.hidden = !running;
+    btnFresh.hidden = !(done || stopped) || running;
+    btnStart.disabled = offline;
+    btnResume.disabled = offline;
+    btnFresh.disabled = offline;
+  }
+
+  async function refreshStatus() {
+    const g = game.value;
+    if (!catalog.includes(g)) return;
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}`);
+      const body = res.ok ? await res.json() : { status: 'idle' };
+      statusEl.textContent = formatStatus(body);
+      applyButtons(body);
+      if (body.running) {
+        if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
+      } else if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch (e) {
+      statusEl.textContent = 'Could not load cache status.';
+    }
+  }
+
+  async function postCache(path, fresh) {
+    const g = game.value;
+    const url = `/api/cache-game/${encodeURIComponent(g)}/${path}`
+      + (fresh ? '?fresh=1' : '');
+    statusEl.textContent = path === 'stop' ? 'Stopping…' : 'Starting…';
+    const res = await fetch(url, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      statusEl.textContent = body.detail || `Request failed (${res.status})`;
+      return;
+    }
+    statusEl.textContent = formatStatus(body);
+    applyButtons(body);
+    if (body.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
+  }
+
+  function syncPanel() {
+    const g = game.value;
+    const show = catalog.includes(g);
+    panel.hidden = !show;
+    if (!show) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      return;
+    }
+    labelEl.textContent = labels[g] || g;
+    refreshStatus();
+  }
+
+  btnStart.addEventListener('click', () => postCache('start', false));
+  btnResume.addEventListener('click', () => postCache('start', false));
+  btnFresh.addEventListener('click', () => {
+    if (!confirm(`Start over and re-cache all ${labels[game.value] || game.value} cards?`)) return;
+    postCache('start', true);
+  });
+  btnStop.addEventListener('click', () => postCache('stop', false));
+  game.addEventListener('change', syncPanel);
+  syncPanel();
 });
 </script>
 {% endblock %}

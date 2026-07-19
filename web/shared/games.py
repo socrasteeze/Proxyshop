@@ -11,6 +11,8 @@
 # Standard Library Imports
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -31,6 +33,11 @@ _APITCG_KEY_FILE = os.environ.get(
 _POKEMONTCG_KEY_FILE = os.environ.get(
     'PROXYSHOP_POKEMONTCG_KEY_FILE', '/run/secrets/proxyshop-pokemontcg-key')
 
+# Polite default pacing for all live provider calls (~4 req/s).
+# Override with PROXYSHOP_PROVIDER_INTERVAL (seconds).
+PROVIDER_INTERVAL = float(os.environ.get('PROXYSHOP_PROVIDER_INTERVAL', '0.25'))
+PROVIDER_MAX_RETRIES = int(os.environ.get('PROXYSHOP_PROVIDER_MAX_RETRIES', '5'))
+
 # Games supported by the search/image layer ('mtg' is handled by carddb)
 GAMES = ('mtg', 'pokemon', 'union-arena', 'riftbound')
 
@@ -44,6 +51,45 @@ GAME_LABELS = {
 
 class ProviderError(RuntimeError):
     """A provider could not be queried (missing key, upstream failure)."""
+
+
+class RateLimiter:
+    """Thread-safe minimum spacing between outbound provider requests."""
+
+    def __init__(self, min_interval: float = PROVIDER_INTERVAL):
+        self._min_interval = max(float(min_interval), 0.0)
+        self._last_request = 0.0
+        self._lock = threading.Lock()
+
+    @property
+    def min_interval(self) -> float:
+        return self._min_interval
+
+    def set_interval(self, seconds: float) -> None:
+        with self._lock:
+            self._min_interval = max(float(seconds), 0.0)
+
+    def wait(self) -> None:
+        with self._lock:
+            wait = self._min_interval - (time.monotonic() - self._last_request)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request = time.monotonic()
+
+
+# Shared limiter for search + catalog + hydrate traffic
+_provider_limiter = RateLimiter(PROVIDER_INTERVAL)
+
+
+def _retry_after_seconds(res: requests.Response, attempt: int) -> float:
+    """Honor Retry-After when present; otherwise exponential backoff."""
+    raw = res.headers.get('Retry-After')
+    if raw:
+        try:
+            return max(float(raw), 1.0)
+        except (TypeError, ValueError):
+            pass
+    return min(60.0, 1.5 * (2 ** attempt))
 
 
 def _read_secret(env_name: str, file_path: str) -> str:
@@ -65,29 +111,50 @@ def _safe_id(value: str) -> str:
     return re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '')).strip('-') or 'unknown'
 
 
-def _get(url: str, params: dict, extra_headers: Optional[dict] = None) -> Any:
+def _request(
+    url: str,
+    params: Optional[dict] = None,
+    extra_headers: Optional[dict] = None,
+) -> requests.Response:
+    """Throttled GET with 429 Retry-After backoff."""
     headers = dict(HEADERS)
     if extra_headers:
         headers.update(extra_headers)
-    try:
-        res = requests.get(
-            url, params=params, headers=headers, timeout=30, allow_redirects=True)
-    except requests.RequestException as e:
-        raise ProviderError(f'Provider request failed: {e}') from e
-    # Defend against clients/proxies that surface the 308 body instead of following
-    if res.status_code in (301, 302, 307, 308):
-        raise ProviderError(
-            f'Provider redirected ({res.status_code}) to '
-            f'{res.headers.get("Location") or "unknown"} — check APITCG_API host')
-    if res.status_code in (401, 403):
-        raise ProviderError('Provider rejected the request (check the API key).')
-    if res.status_code == 429:
-        raise ProviderError('Provider rate limit hit — try again in a minute.')
-    if res.status_code >= 400:
-        body = (res.text or '')[:200].strip()
-        raise ProviderError(
-            f'Provider HTTP {res.status_code}'
-            + (f': {body}' if body else ''))
+    last_err: Optional[ProviderError] = None
+    for attempt in range(PROVIDER_MAX_RETRIES + 1):
+        _provider_limiter.wait()
+        try:
+            res = requests.get(
+                url, params=params or {}, headers=headers, timeout=30,
+                allow_redirects=True)
+        except requests.RequestException as e:
+            raise ProviderError(f'Provider request failed: {e}') from e
+        if res.status_code in (301, 302, 307, 308):
+            raise ProviderError(
+                f'Provider redirected ({res.status_code}) to '
+                f'{res.headers.get("Location") or "unknown"} — check APITCG_API host')
+        if res.status_code in (401, 403):
+            raise ProviderError('Provider rejected the request (check the API key).')
+        if res.status_code == 429:
+            last_err = ProviderError('Provider rate limit hit — backing off.')
+            if attempt >= PROVIDER_MAX_RETRIES:
+                raise ProviderError(
+                    'Provider rate limit hit — try again in a minute.') from last_err
+            time.sleep(_retry_after_seconds(res, attempt))
+            continue
+        if res.status_code >= 400:
+            body = (res.text or '')[:200].strip()
+            raise ProviderError(
+                f'Provider HTTP {res.status_code}'
+                + (f': {body}' if body else ''))
+        return res
+    if last_err:
+        raise last_err
+    raise ProviderError('Provider request failed')
+
+
+def _get(url: str, params: dict, extra_headers: Optional[dict] = None) -> Any:
+    res = _request(url, params=params, extra_headers=extra_headers)
     try:
         payload = res.json()
     except ValueError as e:
@@ -346,6 +413,22 @@ def _normalize_riftbound_card(c: dict) -> Optional[dict]:
     }
 
 
+def _hydrate_riftbound(card: dict) -> dict:
+    """Fetch full RiftScribe detail for a thin list row (best-effort)."""
+    detail_id = (card.get('provider_data') or {}).get('id') or (
+        card.get('provider_data') or {}).get('card_id')
+    if not detail_id:
+        return card
+    try:
+        detail = _get(f'{RIFTSCRIBE_API}/cards/{detail_id}', params={})
+    except ProviderError:
+        return card
+    if not isinstance(detail, dict):
+        return card
+    merged = _normalize_riftbound_card({**(card.get('provider_data') or {}), **detail})
+    return merged or card
+
+
 def search_riftbound(name: str, limit: int = 20) -> list[dict]:
     """Search Riftbound cards via RiftScribe (no API key required)."""
     q = (name or '').strip()
@@ -359,25 +442,102 @@ def search_riftbound(name: str, limit: int = 20) -> list[dict]:
         normalized = _normalize_riftbound_card(c)
         if normalized:
             cards.append(normalized)
-    # Hydrate thin list rows so compose/editor get rules text + HQ art
-    hydrated: list[dict] = []
-    for card in cards[:limit]:
-        detail_id = (card.get('provider_data') or {}).get('id') or (
-            card.get('provider_data') or {}).get('card_id')
-        if not detail_id:
-            hydrated.append(card)
-            continue
-        try:
-            detail = _get(f'{RIFTSCRIBE_API}/cards/{detail_id}', params={})
-            if isinstance(detail, dict):
-                merged = _normalize_riftbound_card({**(card.get('provider_data') or {}), **detail})
-                hydrated.append(merged or card)
-            else:
-                hydrated.append(card)
-        except ProviderError:
-            hydrated.append(card)
-    return hydrated
+    return [_hydrate_riftbound(card) for card in cards[:limit]]
 
+
+def list_riftbound_page(
+    offset: int = 0,
+    limit: int = 50,
+    *,
+    hydrate: bool = False,
+) -> tuple[list[dict], Optional[int]]:
+    """Fetch one RiftScribe catalog page.
+
+    Returns (cards, total_hint) where total_hint comes from X-Total-Count when present.
+    """
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    res = _request(
+        f'{RIFTSCRIBE_API}/cards',
+        params={'limit': limit, 'offset': offset})
+    try:
+        payload = res.json()
+    except ValueError as e:
+        raise ProviderError('Provider returned non-JSON response') from e
+    cards: list[dict] = []
+    for c in _card_rows(payload):
+        normalized = _normalize_riftbound_card(c)
+        if normalized:
+            cards.append(_hydrate_riftbound(normalized) if hydrate else normalized)
+    total: Optional[int] = None
+    raw_total = res.headers.get('X-Total-Count') or res.headers.get('x-total-count')
+    if raw_total:
+        try:
+            total = int(raw_total)
+        except ValueError:
+            total = None
+    return cards, total
+
+
+def list_union_arena_page(page: int = 1, limit: int = 50) -> tuple[list[dict], Optional[int]]:
+    """Fetch one Union Arena catalog page via apitcg (best-effort).
+
+    apitcg's card catalog has been unreliable; callers should handle empty/errors.
+    """
+    key = _apitcg_key()
+    page = max(page, 1)
+    limit = min(max(limit, 1), 50)
+    endpoints: list[tuple[str, dict]] = [
+        (f'{APITCG_API}/union-arena/cards', {'page': page, 'limit': limit}),
+        (f'{APITCG_API}/union-arena/cards', {'offset': (page - 1) * limit, 'limit': limit}),
+        (f'{APITCG_API}/products', {
+            'tcg': 'union-arena', 'type': 'card', 'page': page, 'limit': limit}),
+    ]
+    last_err: Optional[ProviderError] = None
+    for url, params in endpoints:
+        try:
+            data = _get(url, params=params, extra_headers={'x-api-key': key})
+        except ProviderError as e:
+            last_err = e
+            if _apitcg_not_found(e):
+                continue
+            raise
+        rows = _card_rows(data)
+        if not rows:
+            continue
+        cards = []
+        for c in rows:
+            images = c.get('images') or {}
+            set_info = c.get('set') or {}
+            set_code = (
+                set_info.get('name') if isinstance(set_info, dict) else str(set_info)) or ''
+            raw_id = str(c.get('id') or c.get('code') or '')
+            card = {
+                'object': 'card',
+                'game': 'union-arena',
+                'id': f"ua-{_safe_id(raw_id)}",
+                'name': c.get('name', ''),
+                'set': set_code,
+                'set_name': set_code,
+                'collector_number': str(c.get('code', '')),
+                'lang': 'en',
+                'released_at': None,
+                'images': images if isinstance(images, dict) else {},
+                'provider_data': c,
+            }
+            if card['id'] not in ('ua-', 'ua-unknown') and card['name']:
+                cards.append(card)
+        if cards:
+            return cards, None
+    if last_err and _apitcg_not_found(last_err):
+        return [], None
+    if last_err:
+        raise last_err
+    return [], None
+
+
+# Games that support full-catalog cache via manage cache-game
+CATALOG_GAMES = ('riftbound', 'union-arena')
 
 # Registry used by the server: game -> search callable
 PROVIDERS: dict[str, Callable[[str, int], list[dict]]] = {

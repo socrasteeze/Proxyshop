@@ -87,6 +87,35 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   pokecardmaker-style Pillow renderer that runs on the NAS with no Photoshop
   (procedural frames, or drop blank PNGs into `web/shared/compose/frames/`).
   Union Arena remains search/image only.
+- **Full TCG cache (NAS)**: small games can be mirrored into the local DB +
+  `/data/images/` with stop/resume:
+
+  ```bash
+  # Start / resume (Ctrl+C or --stop pauses after the current card)
+  docker exec -it proxyshop-web \
+      python -m web.server.manage cache-game --game riftbound
+
+  # From another shell: ask the running job to stop
+  docker exec proxyshop-web \
+      python -m web.server.manage cache-game --game riftbound --stop
+
+  docker exec proxyshop-web \
+      python -m web.server.manage cache-game --game riftbound --status
+  ```
+
+  Or use **Search → pick Riftbound/Union Arena → Cache all cards** in the
+  browser (same stop/resume checkpoints under `/data/cache-runs/`).
+
+  Bulk cache is rate-limited by default (provider spacing ≈0.35s, page gap
+  ≈0.75s, per-card/image gap ≈0.4s) and retries HTTP 429 with `Retry-After`.
+  Tune with env vars: `PROXYSHOP_PROVIDER_INTERVAL`,
+  `PROXYSHOP_CACHE_PROVIDER_INTERVAL`, `PROXYSHOP_CACHE_PAGE_INTERVAL`,
+  `PROXYSHOP_CACHE_CARD_INTERVAL`, `PROXYSHOP_CACHE_IMAGE_INTERVAL`.
+
+  Re-run the start command to resume from the checkpoint under
+  `/data/cache-runs/`. Use `--fresh` to start over, `--images-only` to fill
+  missing images for cards already in the DB, or `--game union-arena` when
+  apitcg's catalog is healthy. Riftbound uses public RiftScribe (no key).
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
   Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when

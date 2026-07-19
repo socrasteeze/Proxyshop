@@ -142,6 +142,9 @@ while [ $i -lt 15 ]; do
     echo "==> OK: $APP_NAME is up — http://<nas>:$HOST_PORT"
     echo "    First deploy? Import the card database once:"
     echo "    docker exec $APP_NAME python -m web.server.manage bulk-download"
+    echo "    Cache Riftbound (stop/resume safe):"
+    echo "    docker exec -it $APP_NAME python -m web.server.manage cache-game --game riftbound"
+    echo "    docker exec $APP_NAME python -m web.server.manage cache-game --game riftbound --stop"
     if [ -z "$APITCG_KEY" ]; then
       echo "    Union Arena search needs a free apitcg.com key:"
       echo "    echo '<key>' > $APITCG_KEY_FILE  (then re-run this script)"

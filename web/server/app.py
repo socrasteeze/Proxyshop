@@ -33,6 +33,7 @@ from fastapi.templating import Jinja2Templates
 
 # Local Imports
 from web.server.db import JobStore
+from web.server import cache_runner
 from web.shared import games, images, sheets
 from web.shared.carddb import CardDB
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
@@ -57,6 +58,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get('PROXYSHOP_MAX_UPLOAD_MB', '50')) * 1024 *
 JOBS_DIR = DATA_DIR / 'jobs'
 IMAGES_DIR = DATA_DIR / 'images'
 SHEETS_DIR = DATA_DIR / 'sheets'
+CACHE_RUNS_DIR = DATA_DIR / 'cache-runs'
 TEMPLATES_DIR = Path(__file__).parent / 'templates'
 STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -83,6 +85,7 @@ RATE_LIMITS = {
     'import': (6, 60),       # deck imports (may fan out to Scryfall)
     'api': (120, 60),        # general API reads
     'image': (300, 60),      # image serves (mostly cache hits; grids load many)
+    'cache': (6, 60),        # start/stop full-TCG cache runs
 }
 _hits: dict[tuple[str, str], deque] = defaultdict(deque)
 
@@ -287,6 +290,7 @@ def page_search(request: Request, q: str = '', game: str = 'mtg'):
     prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
     return templates.TemplateResponse(request, 'search.html', {
         'q': q, 'game': game, 'games': games.GAME_LABELS,
+        'catalog_games': list(games.CATALOG_GAMES),
         'results': results, 'source': source, 'prices': prices, 'error': error,
         'offline': OFFLINE, 'stats': carddb.stats()})
 
@@ -1032,3 +1036,57 @@ def health():
                 'PROXYSHOP_POKEMONTCG_KEY', games._POKEMONTCG_KEY_FILE)),
         },
     }
+
+
+"""
+* Full-TCG cache (Riftbound / Union Arena)
+"""
+
+
+def _require_catalog_game(game: str) -> str:
+    game = (game or '').strip().lower()
+    if game not in games.CATALOG_GAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Cache only supports: {", ".join(games.CATALOG_GAMES)}')
+    return game
+
+
+@app.get('/api/cache-game/{game}')
+def api_cache_game_status(request: Request, game: str):
+    """Status for a full-catalog cache run (checkpoint + live thread)."""
+    rate_limit(request, 'api')
+    game = _require_catalog_game(game)
+    return cache_runner.status(game, db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.post('/api/cache-game/{game}/start')
+def api_cache_game_start(
+    request: Request,
+    game: str,
+    fresh: bool = False,
+    images_only: bool = False,
+):
+    """Start or resume caching a TCG catalog + HQ images in the background."""
+    rate_limit(request, 'cache')
+    game = _require_catalog_game(game)
+    if OFFLINE:
+        raise HTTPException(
+            status_code=503,
+            detail='Offline mode is on — full TCG cache needs the live provider')
+    return cache_runner.start(
+        game,
+        db=carddb,
+        images_dir=IMAGES_DIR,
+        runs_dir=CACHE_RUNS_DIR,
+        fresh=fresh,
+        images_only=images_only,
+    )
+
+
+@app.post('/api/cache-game/{game}/stop')
+def api_cache_game_stop(request: Request, game: str):
+    """Ask a running cache job to stop after the current card (resumable)."""
+    rate_limit(request, 'cache')
+    game = _require_catalog_game(game)
+    return cache_runner.stop(game, db=carddb, runs_dir=CACHE_RUNS_DIR)

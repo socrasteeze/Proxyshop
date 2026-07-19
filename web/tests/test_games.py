@@ -9,6 +9,17 @@ from web.shared import games, images
 from web.tests.conftest import make_card
 
 
+@pytest.fixture(autouse=True)
+def _fast_provider_limiter():
+    """Disable spacing delays so unit tests stay instant."""
+    prev = games._provider_limiter.min_interval
+    games._provider_limiter.set_interval(0)
+    try:
+        yield
+    finally:
+        games._provider_limiter.set_interval(prev)
+
+
 class TestNormalization:
 
     def test_pokemon_normalization(self, monkeypatch):
@@ -101,6 +112,33 @@ class TestNormalization:
         monkeypatch.setattr(games.requests, 'get', lambda *a, **k: FakeRes())
         with pytest.raises(games.ProviderError, match='API key is required'):
             games._get('https://www.apitcg.com/api/union-arena/cards', {})
+
+    def test_provider_retries_429(self, monkeypatch):
+        calls = {'n': 0}
+        sleeps = []
+
+        class FakeRes:
+            def __init__(self, code, payload=None):
+                self.status_code = code
+                self.headers = {'Retry-After': '0'}
+                self.text = ''
+                self._payload = payload or {'data': []}
+
+            def json(self):
+                return self._payload
+
+        def fake_get(*a, **k):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return FakeRes(429)
+            return FakeRes(200, {'data': [{'id': 'x', 'name': 'Y'}]})
+
+        monkeypatch.setattr(games.requests, 'get', fake_get)
+        monkeypatch.setattr(games.time, 'sleep', lambda s: sleeps.append(s))
+        payload = games._get('https://example.test/cards', {})
+        assert calls['n'] == 2
+        assert payload['data'][0]['name'] == 'Y'
+        assert sleeps  # backed off once
 
 
 class TestMultiGameDb:

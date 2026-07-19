@@ -507,3 +507,56 @@ class TestDeckImport:
         body2 = client.get('/api/cards/search', params={'q': 'black lotus'}).json()
         assert body2['source'] == 'local'
         assert body2['cards'][0]['name'] == 'Black Lotus'
+
+
+class TestCacheGameApi:
+
+    def test_status_idle(self, client):
+        body = client.get('/api/cache-game/riftbound').json()
+        assert body['status'] == 'idle'
+        assert body['running'] is False
+        assert body['db_count'] == 0
+
+    def test_unknown_game_422(self, client):
+        assert client.get('/api/cache-game/mtg').status_code == 422
+        assert client.post('/api/cache-game/mtg/start').status_code == 422
+
+    def test_start_blocked_when_offline(self, client):
+        res = client.post('/api/cache-game/riftbound/start')
+        assert res.status_code == 503
+
+    def test_start_stop_with_stub(self, appmod, client, monkeypatch):
+        appmod.OFFLINE = False
+        started = {'n': 0}
+        stopped = {'n': 0}
+
+        def fake_start(game, **kwargs):
+            started['n'] += 1
+            return {
+                'game': game, 'status': 'running', 'running': True,
+                'stored': 0, 'images_ok': 0, 'images_skip': 0, 'images_fail': 0,
+                'db_count': 0,
+            }
+
+        def fake_stop(game, **kwargs):
+            stopped['n'] += 1
+            return {
+                'game': game, 'status': 'stopped', 'running': False,
+                'stored': 3, 'images_ok': 2, 'images_skip': 0, 'images_fail': 1,
+                'db_count': 3, 'message': 'stop requested',
+            }
+
+        monkeypatch.setattr(appmod.cache_runner, 'start', fake_start)
+        monkeypatch.setattr(appmod.cache_runner, 'stop', fake_stop)
+        body = client.post('/api/cache-game/riftbound/start').json()
+        assert body['running'] is True
+        assert started['n'] == 1
+        body = client.post('/api/cache-game/riftbound/stop').json()
+        assert body['status'] == 'stopped'
+        assert stopped['n'] == 1
+
+    def test_search_page_includes_cache_panel(self, client):
+        res = client.get('/search', params={'game': 'riftbound'})
+        assert res.status_code == 200
+        assert 'id="cache-panel"' in res.text
+        assert 'Cache all cards' in res.text
