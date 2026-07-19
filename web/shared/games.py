@@ -4,17 +4,19 @@
 * card shape the local database stores. MTG stays on the Scryfall path in
 * carddb; these providers cover:
 *   - pokemon      -> pokemontcg.io (free; optional API key raises limits)
-*   - union-arena  -> apitcg.com   (community aggregator; free API key required)
+*   - union-arena  -> unionarena-tcg.com NA+JP cardlists (public; no API key)
 *   - riftbound    -> riftscribe.gg (public; no API key)
 * Must never import from `src/`.
 """
 # Standard Library Imports
+import html as html_lib
 import os
 import re
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urljoin
 
 # Third Party Imports
 import requests
@@ -23,13 +25,16 @@ import requests
 from web.shared.carddb import HEADERS
 
 POKEMON_API = 'https://api.pokemontcg.io/v2'
-# Canonical host — bare apitcg.com returns HTTP 308 → www.apitcg.com
-APITCG_API = 'https://www.apitcg.com/api'
 RIFTSCRIBE_API = 'https://riftscribe.gg/api'
+UA_ORIGIN = 'https://www.unionarena-tcg.com'
+# Official cardlist locales: English (NA) + Japanese
+UA_LOCALES = {
+    'en': {'path': 'na', 'lang': 'en'},
+    'ja': {'path': 'jp', 'lang': 'ja'},
+}
+UA_LOCALE_ORDER = ('en', 'ja')
 
 # Optional in-container secret files (mounted by nas-update.sh)
-_APITCG_KEY_FILE = os.environ.get(
-    'PROXYSHOP_APITCG_KEY_FILE', '/run/secrets/proxyshop-apitcg-key')
 _POKEMONTCG_KEY_FILE = os.environ.get(
     'PROXYSHOP_POKEMONTCG_KEY_FILE', '/run/secrets/proxyshop-pokemontcg-key')
 
@@ -107,7 +112,7 @@ def _read_secret(env_name: str, file_path: str) -> str:
 
 
 def _safe_id(value: str) -> str:
-    """Filesystem-safe id fragment (apitcg ids often contain '/')."""
+    """Filesystem-safe id fragment (provider ids often contain '/')."""
     return re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '')).strip('-') or 'unknown'
 
 
@@ -132,7 +137,7 @@ def _request(
         if res.status_code in (301, 302, 307, 308):
             raise ProviderError(
                 f'Provider redirected ({res.status_code}) to '
-                f'{res.headers.get("Location") or "unknown"} — check APITCG_API host')
+                f'{res.headers.get("Location") or "unknown"} — check API host')
         if res.status_code in (401, 403):
             raise ProviderError('Provider rejected the request (check the API key).')
         if res.status_code == 429:
@@ -159,7 +164,7 @@ def _get(url: str, params: dict, extra_headers: Optional[dict] = None) -> Any:
         payload = res.json()
     except ValueError as e:
         raise ProviderError('Provider returned non-JSON response') from e
-    # apitcg often returns HTTP 200 with {"error": "..."} for auth failures
+    # Some providers return HTTP 200 with {"error": "..."} for auth failures
     if isinstance(payload, dict) and payload.get('error') and 'data' not in payload:
         raise ProviderError(str(payload.get('error')))
     if isinstance(payload, dict) and payload.get('success') is False:
@@ -170,7 +175,7 @@ def _get(url: str, params: dict, extra_headers: Optional[dict] = None) -> Any:
 def _card_rows(payload: Any) -> list[dict]:
     """Normalize provider JSON into a list of card dicts.
 
-    apitcg responses vary: ``{"data":[...]}``, bare ``[...]``, or null ``data``.
+    Responses vary: ``{"data":[...]}``, ``{"cards":[...]}``, bare ``[...]``, or null.
     """
     if payload is None:
         return []
@@ -331,107 +336,269 @@ def list_pokemon_meta() -> dict:
 
 
 """
-* apitcg.com helpers (Union Arena, Riftbound)
+* Union Arena (official NA + JP cardlists — no API key)
 """
 
+_UA_CARD_RE = re.compile(
+    r'card_no=([^"\'&\s>]+)'
+    r'[\s\S]*?'
+    r'data-src="([^"]*images/cardlist/card/[^"]+)"'
+    r'[^>]*\balt="([^"]*)"',
+    re.IGNORECASE,
+)
+_UA_SERIES_OPTION_RE = re.compile(
+    r'<option\b[^>]*\bvalue="(\d+)"[^>]*>([^<]*)</option>',
+    re.IGNORECASE,
+)
 
-def _apitcg_key() -> str:
-    """Return the apitcg.com API key or raise ProviderError."""
-    key = _read_secret('PROXYSHOP_APITCG_KEY', _APITCG_KEY_FILE)
-    if not key:
-        raise ProviderError(
-            'Union Arena needs a free apitcg.com API key — register at '
-            'https://apitcg.com, save it with: '
-            'echo \'YOUR_KEY\' > ~/.proxyshop-apitcg-key && chmod 600 ~/.proxyshop-apitcg-key '
-            'then re-run nas-update.sh so the container picks it up. '
-            '(Riftbound uses RiftScribe and does not need this key.)')
-    return key
-
-
-def _apitcg_not_found(exc: ProviderError) -> bool:
-    """apitcg returns HTTP 500 + Spanish 'Datos no encontrados' for empty searches."""
-    msg = str(exc).lower()
-    return (
-        'no encontrados' in msg
-        or 'not found' in msg
-        or 'no data' in msg
-    )
+# Cached as list of (locale, series_id, label)
+_ua_series_cache: Optional[list[tuple[str, str, str]]] = None
+_ua_series_lock = threading.Lock()
 
 
-def _apitcg_search(path: str, name: str, limit: int, *, tcg: str = '') -> Any:
-    """Query an apitcg cards/products endpoint; treat empty-result 500s as [].
+def _ua_locale_meta(locale: str) -> dict:
+    meta = UA_LOCALES.get(locale) or UA_LOCALES['en']
+    return meta
 
-    Tries the game-specific cards route first, then the unified products route
-    (``/api/products?tcg=…``), which some games populate more reliably.
-    """
-    key = _apitcg_key()
-    names = [name]
-    titled = name[:1].upper() + name[1:] if name else name
-    if titled and titled not in names:
-        names.append(titled)
 
-    endpoints: list[tuple[str, dict]] = []
-    for n in names:
-        endpoints.append((f'{APITCG_API}/{path}', {'name': n}))
-        endpoints.append((
-            f'{APITCG_API}/{path}',
-            {'name': n, 'limit': min(max(limit, 1), 50)}))
-        if tcg:
-            endpoints.append((
-                f'{APITCG_API}/products',
-                {'tcg': tcg, 'name': n, 'type': 'card'}))
-            endpoints.append((
-                f'{APITCG_API}/products',
-                {'tcg': tcg, 'name': n, 'type': 'card',
-                 'limit': min(max(limit, 1), 50)}))
+def _ua_cardlist(locale: str = 'en') -> str:
+    return f"{UA_ORIGIN}/{_ua_locale_meta(locale)['path']}/cardlist"
 
-    last_err: Optional[ProviderError] = None
-    for url, params in endpoints:
+
+def _ua_images_base(locale: str = 'en') -> str:
+    return f"{UA_ORIGIN}/{_ua_locale_meta(locale)['path']}/images/cardlist/card"
+
+
+def _ua_image_url(card_no: str, locale: str = 'en') -> str:
+    """Build the official cardlist PNG URL from a card_no like UE01BT/BLC-1-001."""
+    filename = str(card_no or '').replace('/', '_')
+    if not filename.lower().endswith('.png'):
+        filename = f'{filename}.png'
+    return f'{_ua_images_base(locale)}/{filename}'
+
+
+def _ua_absolute_image(src: str, card_no: str = '', *, locale: str = 'en') -> str:
+    """Resolve a cardlist image src to an absolute URL (drop cache-buster query)."""
+    raw = (src or '').strip()
+    if raw:
+        if raw.startswith('http://') or raw.startswith('https://'):
+            return raw.split('?', 1)[0]
+        if raw.startswith('/'):
+            return urljoin(f'{UA_ORIGIN}/', raw.lstrip('/')).split('?', 1)[0]
+        # Relative paths are rooted under the locale site (na/ or jp/)
+        return urljoin(
+            f"{UA_ORIGIN}/{_ua_locale_meta(locale)['path']}/", raw
+        ).split('?', 1)[0]
+    return _ua_image_url(card_no, locale=locale) if card_no else ''
+
+
+def _ua_name_from_alt(alt: str, card_no: str) -> str:
+    text = html_lib.unescape(alt or '').strip()
+    if card_no and text.startswith(card_no):
+        return text[len(card_no):].strip() or text
+    # Parallel alts often use the base card_no (without _pN) as the prefix
+    base = re.sub(r'_p\d+$', '', card_no or '', flags=re.IGNORECASE)
+    if base and base != card_no and text.startswith(base):
+        return text[len(base):].strip() or text
+    # Fallback: strip any leading PRODUCT/CODE token
+    stripped = re.sub(r'^[A-Z0-9]+(?:/[A-Z0-9._-]+)?\s+', '', text)
+    return stripped.strip() or text
+
+
+def _ua_card_id(card_no: str, locale: str = 'en') -> str:
+    """Stable id; JP gets a lang prefix so it never collides with NA."""
+    safe = _safe_id(card_no)
+    if locale == 'ja':
+        return f'ua-ja-{safe}'
+    return f'ua-{safe}'
+
+
+def _parse_ua_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]:
+    """Extract card rows from official cardlist search/series HTML."""
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for match in _UA_CARD_RE.finditer(page_html or ''):
+        card_no = html_lib.unescape(match.group(1)).strip()
+        if not card_no or card_no in seen:
+            continue
+        seen.add(card_no)
+        image = _ua_absolute_image(
+            html_lib.unescape(match.group(2)), card_no, locale=locale)
+        name = _ua_name_from_alt(match.group(3), card_no)
+        product = card_no.split('/', 1)[0] if '/' in card_no else ''
+        code = card_no.split('/', 1)[1] if '/' in card_no else card_no
+        rows.append({
+            'card_no': card_no,
+            'code': code,
+            'name': name,
+            'set_name': product,
+            'image': image or _ua_image_url(card_no, locale=locale),
+            'locale': locale,
+        })
+    return rows
+
+
+def _parse_ua_series(page_html: str) -> list[tuple[str, str]]:
+    """Parse product series options from the cardlist filter form."""
+    series: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _UA_SERIES_OPTION_RE.finditer(page_html or ''):
+        series_id = match.group(1).strip()
+        label = html_lib.unescape(match.group(2)).strip()
+        if not series_id or series_id in seen:
+            continue
+        seen.add(series_id)
+        series.append((series_id, label))
+    return series
+
+
+def _ua_fetch_html(url: str, params: Optional[dict] = None) -> str:
+    res = _request(url, params=params)
+    return res.text or ''
+
+
+def _ua_series_list(*, force: bool = False) -> list[tuple[str, str, str]]:
+    """Return (locale, series_id, label) for NA then JP product dropdowns."""
+    global _ua_series_cache
+    with _ua_series_lock:
+        if _ua_series_cache is not None and not force:
+            return list(_ua_series_cache)
+    combined: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for locale in UA_LOCALE_ORDER:
         try:
-            return _get(url, params=params, extra_headers={'x-api-key': key})
+            page_html = _ua_fetch_html(f'{_ua_cardlist(locale)}/')
+            for series_id, label in _parse_ua_series(page_html):
+                combined.append((locale, series_id, label))
         except ProviderError as e:
-            last_err = e
-            if _apitcg_not_found(e):
-                continue
-            raise
-    if last_err and _apitcg_not_found(last_err):
-        return {'data': []}
-    if last_err:
-        raise last_err
-    return {'data': []}
+            errors.append(f'{locale}: {e}')
+    if not combined:
+        detail = '; '.join(errors) if errors else 'empty responses'
+        raise ProviderError(f'Union Arena cardlist returned no product series ({detail})')
+    with _ua_series_lock:
+        _ua_series_cache = combined
+        return list(combined)
 
 
-"""
-* Union Arena (apitcg.com)
-"""
+def _normalize_union_arena_card(
+    row: dict,
+    *,
+    set_name: str = '',
+    locale: str = 'en',
+) -> Optional[dict]:
+    """Map a parsed official cardlist row into Proxyshop's cached card shape."""
+    card_no = str(row.get('card_no') or row.get('id') or '').strip()
+    name = str(row.get('name') or '').strip()
+    if not card_no or not name:
+        return None
+    locale = str(row.get('locale') or locale or 'en')
+    if locale not in UA_LOCALES:
+        locale = 'en'
+    lang = _ua_locale_meta(locale)['lang']
+    code = str(row.get('code') or '')
+    if not code:
+        code = card_no.split('/', 1)[1] if '/' in card_no else card_no
+    product = str(row.get('set_name') or '')
+    if not product and '/' in card_no:
+        product = card_no.split('/', 1)[0]
+    label = (set_name or product or '').strip()
+    image = (
+        _ua_absolute_image(str(row.get('image') or ''), card_no, locale=locale)
+        or _ua_image_url(card_no, locale=locale)
+    )
+    cardlist = _ua_cardlist(locale)
+    provider = {
+        'card_no': card_no,
+        'code': code,
+        'name': name,
+        'locale': locale,
+        'set': {'name': label} if label else {},
+        'images': {'small': image, 'large': image},
+        'url': f'{cardlist}/detail_iframe.php?card_no={card_no}',
+    }
+    return {
+        'object': 'card',
+        'game': 'union-arena',
+        'id': _ua_card_id(card_no, locale),
+        'name': name,
+        'set': label,
+        'set_name': label,
+        'collector_number': code,
+        'lang': lang,
+        'released_at': None,
+        'images': {'small': image, 'large': image},
+        'provider_data': provider,
+    }
 
 
 def search_union_arena(name: str, limit: int = 20) -> list[dict]:
-    """Search Union Arena cards by name via the apitcg.com aggregator.
+    """Search Union Arena cards via official NA + JP cardlists (no API key).
 
-    Requires a free API key from apitcg.com in env PROXYSHOP_APITCG_KEY.
+    Always queries both locales. When both return hits, results are interleaved
+    so Japanese printings are not crowded out by a large English match set.
     """
-    data = _apitcg_search('union-arena/cards', name, limit, tcg='union-arena')
-    cards = []
-    for c in _card_rows(data):
-        images = c.get('images') or {}
-        set_info = c.get('set') or {}
-        set_code = (set_info.get('name') if isinstance(set_info, dict) else str(set_info)) or ''
-        raw_id = str(c.get('id') or c.get('code') or '')
-        cards.append({
-            'object': 'card',
-            'game': 'union-arena',
-            'id': f"ua-{_safe_id(raw_id)}",
-            'name': c.get('name', ''),
-            'set': set_code,
-            'set_name': set_code,
-            'collector_number': str(c.get('code', '')),
-            'lang': 'en',
-            'released_at': None,
-            'images': images if isinstance(images, dict) else {},
-            'provider_data': c,
-        })
-    return [c for c in cards if c['id'] not in ('ua-', 'ua-unknown') and c['name']]
+    q = (name or '').strip()
+    if len(q) < 2:
+        return []
+    limit = max(limit, 1)
+    by_locale: dict[str, list[dict]] = {loc: [] for loc in UA_LOCALE_ORDER}
+    seen: set[str] = set()
+    for locale in UA_LOCALE_ORDER:
+        page_html = _ua_fetch_html(
+            f'{_ua_cardlist(locale)}/index.php',
+            params={'search': 'true', 'freewords': q})
+        for row in _parse_ua_cardlist_html(page_html, locale=locale):
+            card = _normalize_union_arena_card(row, locale=locale)
+            if not card or card['id'] in seen:
+                continue
+            seen.add(card['id'])
+            by_locale[locale].append(card)
+            if len(by_locale[locale]) >= limit:
+                break
+
+    # Interleave so both EN and JA show up when both matched
+    cards: list[dict] = []
+    buckets = [by_locale[loc] for loc in UA_LOCALE_ORDER]
+    indexes = [0] * len(buckets)
+    while len(cards) < limit:
+        progressed = False
+        for i, bucket in enumerate(buckets):
+            if indexes[i] < len(bucket):
+                cards.append(bucket[indexes[i]])
+                indexes[i] += 1
+                progressed = True
+                if len(cards) >= limit:
+                    break
+        if not progressed:
+            break
+    return cards
+
+
+def list_union_arena_page(page: int = 1, limit: int = 50) -> tuple[list[dict], Optional[int]]:
+    """Fetch one Union Arena catalog page (one official product series).
+
+    ``page`` is 1-based over the combined NA+JP product dropdowns. ``limit`` is
+    unused (the site returns the full series in one HTML response). Returns
+    ``(cards, series_count)``.
+    """
+    del limit  # full series per page; client-side pager is irrelevant
+    series = _ua_series_list()
+    page = max(page, 1)
+    if page > len(series):
+        return [], len(series)
+    locale, series_id, series_name = series[page - 1]
+    page_html = _ua_fetch_html(
+        f'{_ua_cardlist(locale)}/index.php',
+        params={'search': 'true', 'series': series_id})
+    cards: list[dict] = []
+    seen: set[str] = set()
+    for row in _parse_ua_cardlist_html(page_html, locale=locale):
+        card = _normalize_union_arena_card(row, set_name=series_name, locale=locale)
+        if not card or card['id'] in seen:
+            continue
+        seen.add(card['id'])
+        cards.append(card)
+    return cards, len(series)
 
 
 """
@@ -575,63 +742,6 @@ def list_riftbound_page(
         except ValueError:
             total = None
     return cards, total
-
-
-def list_union_arena_page(page: int = 1, limit: int = 50) -> tuple[list[dict], Optional[int]]:
-    """Fetch one Union Arena catalog page via apitcg (best-effort).
-
-    apitcg's card catalog has been unreliable; callers should handle empty/errors.
-    """
-    key = _apitcg_key()
-    page = max(page, 1)
-    limit = min(max(limit, 1), 50)
-    endpoints: list[tuple[str, dict]] = [
-        (f'{APITCG_API}/union-arena/cards', {'page': page, 'limit': limit}),
-        (f'{APITCG_API}/union-arena/cards', {'offset': (page - 1) * limit, 'limit': limit}),
-        (f'{APITCG_API}/products', {
-            'tcg': 'union-arena', 'type': 'card', 'page': page, 'limit': limit}),
-    ]
-    last_err: Optional[ProviderError] = None
-    for url, params in endpoints:
-        try:
-            data = _get(url, params=params, extra_headers={'x-api-key': key})
-        except ProviderError as e:
-            last_err = e
-            if _apitcg_not_found(e):
-                continue
-            raise
-        rows = _card_rows(data)
-        if not rows:
-            continue
-        cards = []
-        for c in rows:
-            images = c.get('images') or {}
-            set_info = c.get('set') or {}
-            set_code = (
-                set_info.get('name') if isinstance(set_info, dict) else str(set_info)) or ''
-            raw_id = str(c.get('id') or c.get('code') or '')
-            card = {
-                'object': 'card',
-                'game': 'union-arena',
-                'id': f"ua-{_safe_id(raw_id)}",
-                'name': c.get('name', ''),
-                'set': set_code,
-                'set_name': set_code,
-                'collector_number': str(c.get('code', '')),
-                'lang': 'en',
-                'released_at': None,
-                'images': images if isinstance(images, dict) else {},
-                'provider_data': c,
-            }
-            if card['id'] not in ('ua-', 'ua-unknown') and card['name']:
-                cards.append(card)
-        if cards:
-            return cards, None
-    if last_err and _apitcg_not_found(last_err):
-        return [], None
-    if last_err:
-        raise last_err
-    return [], None
 
 
 # Games that support cache-game (selective for mtg/pokemon; full for small TCGs)

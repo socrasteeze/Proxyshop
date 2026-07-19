@@ -17,8 +17,6 @@ services:
       PROXYSHOP_MAX_UPLOAD_MB: "50"
       # Optional: raises pokemontcg.io rate limits (free key from pokemontcg.io)
       PROXYSHOP_POKEMONTCG_KEY: ${PROXYSHOP_POKEMONTCG_KEY:-}
-      # Required for Union Arena + Riftbound search (free key from apitcg.com)
-      PROXYSHOP_APITCG_KEY: ${PROXYSHOP_APITCG_KEY:-}
     restart: unless-stopped
 
 volumes:

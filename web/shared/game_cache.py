@@ -221,7 +221,9 @@ def _fetch_catalog_page(
         cards, total = games.list_union_arena_page(
             page=progress.page,
             limit=progress.page_size)
-        return cards, total, len(cards) >= progress.page_size
+        # page indexes product series; total is series count
+        has_more = total is not None and progress.page < total
+        return cards, total, has_more
     if game == 'mtg':
         return db.list_scryfall_page(progress.query, page=progress.page, store=False)
     if game == 'pokemon':
@@ -430,21 +432,22 @@ def _run_catalog(
     watch: _StopWatch,
     print_fn,
 ) -> None:
-    empty_pages = 0
     while True:
         watch.check()
         cards, total, has_more = _fetch_catalog_page(progress.game, progress, db)
         if total is not None:
             progress.total_hint = total
         if not cards:
-            empty_pages += 1
-            if progress.game == 'union-arena' and empty_pages < 2:
-                progress.page += 1
+            # Empty product series (or transient miss): advance while more remain
+            if has_more:
+                if progress.game == 'riftbound':
+                    progress.offset += progress.page_size
+                else:
+                    progress.page += 1
                 save_checkpoint(checkpoint_path(watch.runs_dir, progress.game), progress)
                 _polite_sleep(CACHE_PAGE_INTERVAL, watch)
                 continue
             break
-        empty_pages = 0
         for card in cards:
             watch.check()
             _store_and_image(db, images_dir, card, progress, watch, print_fn)

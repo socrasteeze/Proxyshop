@@ -78,7 +78,9 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   HQ download buttons. Supported games: **MTG** (Scryfall),
   **Pokémon** ([pokemontcg.io](https://pokemontcg.io) — works keyless; a free
   key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), **Union Arena**
-  ([apitcg.com](https://apitcg.com) — free key in `PROXYSHOP_APITCG_KEY`), and
+  ([official NA + JP cardlists](https://www.unionarena-tcg.com/na/cardlist/) —
+  no key; English and Japanese printings; card images are Bandai 600×837 PNGs),
+  and
   **Riftbound** ([RiftScribe](https://riftscribe.gg/api-docs) — public, no key).
   Everything found online is cached locally, so the
   browser works offline for anything you've seen before. Photoshop rendering
@@ -230,17 +232,13 @@ update script** so the container restarts with them injected. Writing the
 file alone does not update a running container.
 
 ```sh
-# Union Arena search only (free key from https://apitcg.com):
-# Riftbound uses RiftScribe and needs no key.
-echo 'YOUR_APITCG_KEY' > ~/.proxyshop-apitcg-key
-chmod 600 ~/.proxyshop-apitcg-key
 # Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):
+# Union Arena (official cardlist) and Riftbound (RiftScribe) need no key.
 echo 'YOUR_POKEMONTCG_KEY' > ~/.proxyshop-pokemontcg-key
 chmod 600 ~/.proxyshop-pokemontcg-key
 # Required: restart the container with the key
 sh ~/proxyshop-web/nas-update.sh
-# Confirm: curl -s http://127.0.0.1:8000/api/health | grep apitcg
-# should show "apitcg": true
+# Confirm: curl -s http://127.0.0.1:8000/api/health | grep pokemontcg
 ```
 
 After that, refresh from your Windows desktop with one command —

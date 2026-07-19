@@ -1142,8 +1142,6 @@ def health():
         'cards': carddb.stats(),
         'workers': store.get_workers(),
         'keys': {
-            'apitcg': bool(games._read_secret(
-                'PROXYSHOP_APITCG_KEY', games._APITCG_KEY_FILE)),
             'pokemontcg': bool(games._read_secret(
                 'PROXYSHOP_POKEMONTCG_KEY', games._POKEMONTCG_KEY_FILE)),
         },
