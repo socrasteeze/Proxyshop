@@ -361,17 +361,16 @@ document.addEventListener('DOMContentLoaded', () => {
     form.submit();
   });
 
+  // No auto-search: typing never reloads the page. Submit explicitly with
+  // Enter or the Apply filters button. We do remember which text field was
+  // focused on submit so it re-focuses after the reload — lets you keep
+  // refining a query without hunting for the box again.
   const FOCUS_KEY = 'proxyshop.gallery.focus';
-  let t = null;
-  ['gallery-q', 'gallery-set'].forEach((id) => {
-    const el = document.getElementById(id);
-    el.addEventListener('input', () => {
-      clearTimeout(t);
-      t = setTimeout(() => {
-        try { sessionStorage.setItem(FOCUS_KEY, id); } catch (e) { /* private mode */ }
-        form.submit();
-      }, 650);
-    });
+  form.addEventListener('submit', () => {
+    const a = document.activeElement;
+    if (a && (a.id === 'gallery-q' || a.id === 'gallery-set')) {
+      try { sessionStorage.setItem(FOCUS_KEY, a.id); } catch (e) { /* private mode */ }
+    }
   });
   try {
     const focusId = sessionStorage.getItem(FOCUS_KEY);
