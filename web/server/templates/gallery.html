@@ -48,9 +48,16 @@
     </label>
     <label>Sort by
       <select name="sort" id="gallery-sort">
-        <option value="name" {% if sort == 'name' %}selected{% endif %}>Name</option>
-        <option value="set" {% if sort == 'set' %}selected{% endif %}>Set / number</option>
-        <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Recently added</option>
+        {% for key, label in sort_options %}
+        <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Order
+      <select name="direction" id="gallery-direction">
+        <option value="" {% if not direction %}selected{% endif %}>Auto ({{ resolved_dir }})</option>
+        <option value="asc" {% if direction == 'asc' %}selected{% endif %}>Ascending</option>
+        <option value="desc" {% if direction == 'desc' %}selected{% endif %}>Descending</option>
       </select>
     </label>
     {# Server-rendered facet dropdowns — same idea as the download panel, but
@@ -105,9 +112,13 @@
     <div class="gallery-toolbar">
       <div class="view-toggle" role="group" aria-label="View mode">
         <a class="{% if view == 'grid' %}is-active{% endif %}"
-           href="{{ page_url(page, view='grid') }}" aria-label="Grid view">Grid</a>
+           href="{{ page_url(page, view='grid') }}" aria-label="Image grid view">Images</a>
         <a class="{% if view == 'list' %}is-active{% endif %}"
            href="{{ page_url(page, view='list') }}" aria-label="List view">List</a>
+        <a class="{% if view == 'full' %}is-active{% endif %}"
+           href="{{ page_url(page, view='full') }}" aria-label="Full view">Full</a>
+        <a class="{% if view == 'checklist' %}is-active{% endif %}"
+           href="{{ page_url(page, view='checklist') }}" aria-label="Checklist view">Checklist</a>
       </div>
       <label>Arts
         <select id="gallery-arts" aria-label="Art grouping">
@@ -128,18 +139,115 @@
     </div>
   </div>
 
+  {% set is_mtg = game == 'mtg' %}
   {% if cards %}
-  {% if view == 'list' %}
-  <div class="card-list" id="gallery-grid">
+  {% if view == 'checklist' %}
+  {# Dense spreadsheet-style table (Scryfall "Checklist"). #}
+  <div class="checklist-wrap" id="gallery-grid">
+    <table class="checklist">
+      <thead>
+        <tr>
+          <th>Set</th><th class="num">№</th><th>Name</th>
+          {% if is_mtg %}<th>Cost</th>{% endif %}
+          <th>Type</th><th>R</th><th>La</th><th>Artist</th>
+          {% if is_mtg %}<th class="num">USD</th><th class="num">EUR</th><th class="num">TIX</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cards %}
+        <tr class="checklist-row js-card-preview" data-card-id="{{ c.id }}">
+          <td class="c-set">{{ (c.set or '')|upper }}</td>
+          <td class="num">{{ c.collector_number }}</td>
+          <td class="c-name">
+            <a href="/card/{{ c.id }}">{{ c.name }}</a>
+            {% if c.art_count and c.art_count > 1 %}<span class="badge-inline" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>{% endif %}
+          </td>
+          {% if is_mtg %}<td class="c-cost">{{ (c.detail.mana_cost or '')|replace('{', '')|replace('}', '') }}</td>{% endif %}
+          <td class="c-type">{{ c.detail.type_line or '' }}</td>
+          <td class="c-rarity">{{ (c.detail.rarity or '')[:1]|upper }}</td>
+          <td class="c-lang">{{ (c.lang or '')|upper }}</td>
+          <td class="c-artist">{{ c.detail.artist or '' }}</td>
+          {% if is_mtg %}
+          <td class="num price">{% if c.detail.usd %}${{ c.detail.usd }}{% endif %}</td>
+          <td class="num price">{% if c.detail.eur %}€{{ c.detail.eur }}{% endif %}</td>
+          <td class="num price">{{ c.detail.tix or '' }}</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif view == 'full' %}
+  {# Large image + full details panel per card (Scryfall "Full"). #}
+  <div class="card-full-list" id="gallery-grid">
     {% for c in cards %}
-    <a class="card-list-row js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
+    <div class="full-row">
+      <a class="full-art js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
+        {% if c.art_count and c.art_count > 1 %}
+        <span class="card-badge" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>
+        {% endif %}
+        <img loading="lazy" width="336" height="468"
+             src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+      </a>
+      <div class="full-info">
+        <div class="full-title">
+          <a href="/card/{{ c.id }}"><strong>{{ c.name }}</strong></a>
+          {% if is_mtg and c.detail.mana_cost %}<span class="mana">{{ c.detail.mana_cost|replace('{', '')|replace('}', '') }}</span>{% endif %}
+        </div>
+        {% if c.detail.type_line %}<div class="full-type">{{ c.detail.type_line }}</div>{% endif %}
+        {% if c.detail.oracle_text %}<div class="full-oracle">{{ c.detail.oracle_text }}</div>{% endif %}
+        {% if c.detail.flavor_text %}<div class="full-flavor muted">{{ c.detail.flavor_text }}</div>{% endif %}
+        {% if c.detail.pt %}<div class="full-stat">{{ c.detail.pt }}</div>{% endif %}
+        {% if c.detail.hp %}<div class="full-stat">HP {{ c.detail.hp }}</div>{% endif %}
+        <div class="full-meta muted">
+          {{ (c.set or '')|upper }} · #{{ c.collector_number }} · {{ (c.lang or '')|upper }}
+          {% if c.detail.rarity %}· {{ c.detail.rarity|capitalize }}{% endif %}
+          {% if c.detail.artist %}· Illus. {{ c.detail.artist }}{% endif %}
+          · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
+        </div>
+        {% if is_mtg and (c.detail.usd or c.detail.eur or c.detail.tix) %}
+        <div class="full-prices">
+          {% if c.detail.usd %}<span>${{ c.detail.usd }}</span>{% endif %}
+          {% if c.detail.eur %}<span>€{{ c.detail.eur }}</span>{% endif %}
+          {% if c.detail.tix %}<span>{{ c.detail.tix }} TIX</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if is_mtg and c.detail.legalities %}
+        <div class="full-legalities">
+          {% for fmt in ['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'commander', 'pauper'] %}
+          {% set st = c.detail.legalities.get(fmt) %}
+          {% if st %}
+          <span class="legal legal-{{ 'yes' if st == 'legal' else 'no' }}">{{ fmt|capitalize }}</span>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif view == 'list' %}
+  {# Thumbnail + inline card details (enriched list). #}
+  <div class="card-detail-list" id="gallery-grid">
+    {% for c in cards %}
+    <a class="detail-row js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
       <span class="card-frame">
-        <img loading="lazy" width="63" height="88"
+        <img loading="lazy" width="88" height="123"
              src="/api/cards/{{ c.id }}/image?kind=large" alt="">
       </span>
-      <span class="card-list-meta">
-        <span class="name">{{ c.name }}</span>
-        <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
+      <span class="detail-body">
+        <span class="detail-head">
+          <span class="name">{{ c.name }}</span>
+          {% if is_mtg and c.detail.mana_cost %}<span class="mana">{{ c.detail.mana_cost|replace('{', '')|replace('}', '') }}</span>{% endif %}
+        </span>
+        {% if c.detail.type_line %}<span class="muted type">{{ c.detail.type_line }}</span>{% endif %}
+        {% if c.detail.oracle_text %}<span class="oracle">{{ c.detail.oracle_text }}</span>{% endif %}
+        <span class="detail-foot muted">
+          {{ (c.set or '')|upper }} #{{ c.collector_number }}
+          {% if c.detail.rarity %}· {{ c.detail.rarity|capitalize }}{% endif %}
+          {% if c.detail.artist %}· {{ c.detail.artist }}{% endif %}
+          {% if c.detail.pt %}· {{ c.detail.pt }}{% endif %}
+          {% if is_mtg and c.detail.usd %}· ${{ c.detail.usd }}{% endif %}
           · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
         </span>
       </span>
@@ -212,6 +320,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const perPageSel = document.getElementById('gallery-per-page');
   document.getElementById('gallery-game').addEventListener('change', () => form.submit());
   document.getElementById('gallery-sort').addEventListener('change', () => form.submit());
+  const dirSel = document.getElementById('gallery-direction');
+  if (dirSel) dirSel.addEventListener('change', () => form.submit());
   artsSel.addEventListener('change', () => {
     document.getElementById('gallery-arts-hidden').value = artsSel.value;
     form.submit();

@@ -37,6 +37,45 @@ SCRYFALL_API = 'https://api.scryfall.com'
 BULK_DATA_URL = f'{SCRYFALL_API}/bulk-data'
 COLLECTION_URL = f'{SCRYFALL_API}/cards/collection'
 
+# Gallery sort keys → (primary SQL expression, numeric?, natural default dir).
+# Numeric sorts push NULLs last regardless of direction. The JSON-backed keys
+# read Scryfall fields from the stored card object and are only offered for MTG
+# in the UI, but degrade to NULL (→ name order) for other games rather than
+# erroring. Shared tiebreak (set / collector number / name) is appended below.
+GALLERY_SORTS: dict[str, tuple[str, bool, str]] = {
+    'name': ('name COLLATE NOCASE', False, 'asc'),
+    'set': ('set_code', False, 'asc'),
+    'newest': ('fetched_at', False, 'desc'),
+    'released': ("COALESCE(released_at, '')", False, 'desc'),
+    'rarity': (
+        "CASE lower(COALESCE(json_extract(json,'$.rarity'),''))"
+        " WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2"
+        " WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5"
+        " ELSE 6 END", False, 'asc'),
+    'color': (
+        "CASE"
+        " WHEN (SELECT COUNT(*) FROM json_each(cards.json,'$.colors')) = 0 THEN 6"
+        " WHEN (SELECT COUNT(*) FROM json_each(cards.json,'$.colors')) > 1 THEN 5"
+        " ELSE (CASE json_extract(cards.json,'$.colors[0]')"
+        "        WHEN 'W' THEN 0 WHEN 'U' THEN 1 WHEN 'B' THEN 2"
+        "        WHEN 'R' THEN 3 WHEN 'G' THEN 4 ELSE 5 END) END", False, 'asc'),
+    'usd': ("CAST(json_extract(json,'$.prices.usd') AS REAL)", True, 'desc'),
+    'eur': ("CAST(json_extract(json,'$.prices.eur') AS REAL)", True, 'desc'),
+    'tix': ("CAST(json_extract(json,'$.prices.tix') AS REAL)", True, 'desc'),
+    'cmc': ("CAST(json_extract(json,'$.cmc') AS REAL)", True, 'asc'),
+    'power': ("CAST(json_extract(json,'$.power') AS REAL)", True, 'asc'),
+    'toughness': ("CAST(json_extract(json,'$.toughness') AS REAL)", True, 'asc'),
+    'artist': ("COALESCE(json_extract(json,'$.artist'),'') COLLATE NOCASE",
+               False, 'asc'),
+    'edhrec': ("CAST(json_extract(json,'$.edhrec_rank') AS INTEGER)", True, 'asc'),
+}
+
+# Secondary keys applied after every primary sort so equal values stay stable
+# and set/number ties read naturally (numeric collector order, not '10' < '2').
+_GALLERY_TIEBREAK = (
+    'set_code ASC, CAST(collector_number AS INTEGER) ASC, '
+    'collector_number ASC, name COLLATE NOCASE ASC')
+
 # Scryfall asks for an identifying User-Agent and an Accept header.
 HEADERS = {
     'User-Agent': 'ProxyshopWeb/1.0 (+https://github.com/socrasteeze/Proxyshop)',
@@ -706,7 +745,9 @@ class CardDB:
         offset: int = 0,
         limit: int = 60,
         sort: str = 'name',
+        direction: str = '',
         group_arts: bool = False,
+        detail: bool = False,
     ) -> tuple[list[dict], int]:
         """Browse locally cached cards (no network).
 
@@ -744,15 +785,20 @@ class CardDB:
                 where.append(f"set_code IN ({','.join('?' * len(codes))})")
                 params.extend(codes)
         clause = ' AND '.join(where)
-        order = {
-            'name': 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC',
-            'set': 'set_code ASC, collector_number ASC, name COLLATE NOCASE ASC',
-            'newest': 'fetched_at DESC, name COLLATE NOCASE ASC',
-            'id': 'id ASC',
-        }.get(sort, 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC')
+        primary, is_numeric, default_dir = GALLERY_SORTS.get(
+            sort, GALLERY_SORTS['name'])
+        dir_kw = 'DESC' if (direction or default_dir).lower() == 'desc' else 'ASC'
+        # Numeric sorts keep unpriced/statless cards at the bottom either way.
+        null_ungrouped = f'({primary} IS NULL) ASC, ' if is_numeric else ''
+        null_grouped = '(sortk IS NULL) ASC, ' if is_numeric else ''
+        order = f'{null_ungrouped}{primary} {dir_kw}, {_GALLERY_TIEBREAK}'
+        order_grouped = f'{null_grouped}sortk {dir_kw}, {_GALLERY_TIEBREAK}'
+        # Detail views (List / Full / Checklist) need the display fields that
+        # live in the stored card object; grid only needs the projection.
+        detail_col = ', json' if detail else ''
 
         def _row(r: sqlite3.Row) -> dict:
-            return {
+            row = {
                 'id': r['id'],
                 'name': r['name'],
                 'set': r['set_code'],
@@ -762,6 +808,12 @@ class CardDB:
                 'game': r['game'] or 'mtg',
                 'art_count': int(r['art_count']) if 'art_count' in r.keys() else 1,
             }
+            if detail and 'json' in r.keys():
+                try:
+                    row['data'] = json.loads(r['json']) if r['json'] else {}
+                except (TypeError, ValueError):
+                    row['data'] = {}
+            return row
 
         if not group_arts:
             total = con.execute(
@@ -770,7 +822,7 @@ class CardDB:
             rows = con.execute(
                 f"""
                 SELECT id, name, set_code, collector_number, lang, released_at, game,
-                       1 AS art_count
+                       1 AS art_count{detail_col}
                 FROM cards
                 WHERE {clause}
                 ORDER BY {order}
@@ -787,15 +839,16 @@ class CardDB:
                 GROUP BY {group_expr}
             )
             """, params).fetchone()['n']
-        # Newest printing wins within each art group; outer ORDER BY uses the
-        # same sort keys as the ungrouped gallery.
+        # Newest printing wins within each art group; the representative row's
+        # sort expression (sortk) drives the outer ORDER BY so JSON-backed sorts
+        # (price, mana value, …) work on grouped results too.
         rows = con.execute(
             f"""
             SELECT id, name, set_code, collector_number, lang, released_at, game,
-                   art_count, fetched_at
+                   art_count, fetched_at, sortk{detail_col}
             FROM (
                 SELECT id, name, set_code, collector_number, lang, released_at, game,
-                       fetched_at,
+                       fetched_at, {primary} AS sortk{detail_col},
                        COUNT(*) OVER (PARTITION BY {group_expr}) AS art_count,
                        ROW_NUMBER() OVER (
                            PARTITION BY {group_expr}
@@ -805,7 +858,7 @@ class CardDB:
                 WHERE {clause}
             )
             WHERE rn = 1
-            ORDER BY {order}
+            ORDER BY {order_grouped}
             LIMIT ? OFFSET ?
             """, (*params, limit, offset)).fetchall()
         return [_row(r) for r in rows], int(total)

@@ -35,7 +35,7 @@ from fastapi.templating import Jinja2Templates
 from web.server.db import JobStore
 from web.server import cache_runner
 from web.shared import games, images, sheets
-from web.shared.carddb import CardDB
+from web.shared.carddb import CardDB, GALLERY_SORTS
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
     Capabilities, DeckCardLine, DeckImportReport, JobResult, JobStatus, RenderMode)
@@ -307,6 +307,71 @@ GALLERY_FILTER_FIELDS = {
     'frarity': 'rarity',
 }
 
+# Card-library sort menu. Labels mirror Scryfall; the price/mana/EDHREC keys
+# read Scryfall fields so they're only offered for MTG. Others get the basics.
+GALLERY_SORT_LABELS = [
+    ('name', 'Name'),
+    ('released', 'Release date'),
+    ('set', 'Set / number'),
+    ('rarity', 'Rarity'),
+    ('color', 'Color'),
+    ('usd', 'Price: USD'),
+    ('tix', 'Price: TIX'),
+    ('eur', 'Price: EUR'),
+    ('cmc', 'Mana value'),
+    ('power', 'Power'),
+    ('toughness', 'Toughness'),
+    ('artist', 'Artist name'),
+    ('edhrec', 'EDHREC rank'),
+    ('newest', 'Recently added'),
+]
+_BASIC_SORT_KEYS = {'name', 'set', 'released', 'rarity', 'artist', 'newest'}
+
+
+def _gallery_sort_options(game: str) -> list[tuple[str, str]]:
+    """Sort choices for the given game (full Scryfall menu for MTG)."""
+    if game == 'mtg':
+        return list(GALLERY_SORT_LABELS)
+    return [(k, label) for k, label in GALLERY_SORT_LABELS
+            if k in _BASIC_SORT_KEYS]
+
+
+def _gallery_detail_fields(data: dict, game: str) -> dict:
+    """Compact display fields for the List / Full / Checklist views.
+
+    Reads from the stored card object; falls back to provider_data for the
+    non-MTG games so their rows still show type / rarity / artist.
+    """
+    data = data or {}
+    provider = data.get('provider_data') or {}
+
+    def first(*keys):
+        for k in keys:
+            v = data.get(k)
+            if v in (None, ''):
+                v = provider.get(k)
+            if v not in (None, ''):
+                return v
+        return None
+
+    prices = data.get('prices') or {}
+    power, toughness = data.get('power'), data.get('toughness')
+    pt = f'{power}/{toughness}' if power is not None and toughness is not None else None
+    return {
+        'mana_cost': first('mana_cost'),
+        'type_line': first('type_line', 'supertype', 'cardType'),
+        'rarity': first('rarity'),
+        'artist': first('artist'),
+        'oracle_text': first('oracle_text', 'effect', 'ability', 'description'),
+        'flavor_text': data.get('flavor_text'),
+        'pt': pt,
+        'hp': provider.get('hp'),
+        'usd': prices.get('usd'),
+        'eur': prices.get('eur'),
+        'tix': prices.get('tix'),
+        'legalities': data.get('legalities') or {},
+    }
+
 
 @app.get('/gallery', response_class=HTMLResponse)
 def page_gallery(
@@ -315,6 +380,7 @@ def page_gallery(
     q: str = '',
     set: str = '',
     sort: str = 'name',
+    direction: str = '',
     page: int = 1,
     per_page: int = 60,
     view: str = 'grid',
@@ -330,8 +396,16 @@ def page_gallery(
     game = (game or '').strip().lower()
     if game and game not in games.GAMES:
         raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
-    sort = sort if sort in {'name', 'set', 'newest'} else 'name'
-    view = view if view in {'grid', 'list'} else 'grid'
+    # Scryfall-style sort menu is only meaningful for MTG (price/mana/EDHREC
+    # come from Scryfall fields); other games keep the basic keys.
+    sort_choices = _gallery_sort_options(game)
+    valid_sorts = {k for k, _ in sort_choices}
+    sort = sort if sort in valid_sorts else 'name'
+    direction = direction if direction in {'asc', 'desc'} else ''
+    resolved_dir = direction or GALLERY_SORTS.get(
+        sort, ('', False, 'asc'))[2]
+    view = view if view in {'grid', 'list', 'full', 'checklist'} else 'grid'
+    want_detail = view in {'list', 'full', 'checklist'}
     arts = arts if arts in {'unique', 'combine'} else 'unique'
     group_arts = arts == 'combine'
     page = max(int(page or 1), 1)
@@ -369,7 +443,9 @@ def page_gallery(
         offset=(page - 1) * per_page,
         limit=per_page,
         sort=sort,
+        direction=resolved_dir,
         group_arts=group_arts,
+        detail=want_detail,
     )
     counts = carddb.counts_by_game()
     pages = max(1, (total + per_page - 1) // per_page) if total else 1
@@ -397,6 +473,9 @@ def page_gallery(
             'view': overrides.get('view', view),
             'arts': overrides.get('arts', arts),
         }
+        d = overrides.get('direction', direction)
+        if d:
+            params['direction'] = d
         g = overrides.get('game', game)
         qq = overrides.get('q', q)
         ss = overrides.get('set', set)
@@ -435,6 +514,12 @@ def page_gallery(
     show_series = bool(game) and len(series_options) < sum(
         1 for _ in carddb.distinct_sets(game))
 
+    # For the detail-bearing views, fold the stored card JSON into the compact
+    # display fields the List / Full / Checklist templates render.
+    if want_detail:
+        for c in cards:
+            c['detail'] = _gallery_detail_fields(c.pop('data', {}), c['game'])
+
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,
         'q': q,
@@ -445,6 +530,9 @@ def page_gallery(
         'facets': facets,
         'set_options': set_options,
         'sort': sort,
+        'sort_options': sort_choices,
+        'direction': direction,
+        'resolved_dir': resolved_dir,
         'page': page,
         'pages': pages,
         'page_links': page_links,

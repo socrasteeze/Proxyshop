@@ -61,7 +61,9 @@ class TestPages:
         assert 'Apply filters' in res.text
         assert 'Show unique arts' in res.text
         assert 'Per page' in res.text
-        assert 'Grid' in res.text and 'List' in res.text
+        # View modes: Images (grid), List, Full, Checklist
+        assert 'Images' in res.text and 'List' in res.text
+        assert 'Full' in res.text and 'Checklist' in res.text
         assert b'Card library' in client.get('/').content
         body = client.get('/api/cards/gallery').json()
         assert body['total'] == 1
@@ -533,6 +535,73 @@ class TestGalleryFilters:
         assert r.status_code == 200
         assert 'Boss Orders' in r.text
         assert 'Pikachu' not in r.text
+
+
+class TestGallerySortViews:
+
+    def _seed_mtg(self, appmod):
+        cheap = make_card('m-1', 'Llanowar Elves', 'dom', '168')
+        cheap.update({'cmc': 1, 'rarity': 'common', 'colors': ['G'],
+                      'type_line': 'Creature — Elf Druid', 'mana_cost': '{G}',
+                      'oracle_text': '{T}: Add {G}.', 'power': '1', 'toughness': '1',
+                      'artist': 'Chris Rahn', 'edhrec_rank': 200,
+                      'prices': {'usd': '0.25', 'eur': '0.20', 'tix': '0.02'},
+                      'legalities': {'commander': 'legal', 'modern': 'legal',
+                                     'standard': 'not_legal'}})
+        pricey = make_card('m-2', 'Mana Crypt', 'ema', '225')
+        pricey.update({'cmc': 0, 'rarity': 'mythic', 'colors': [],
+                       'type_line': 'Artifact', 'mana_cost': '{0}',
+                       'artist': 'Alan Pollack', 'edhrec_rank': 5,
+                       'prices': {'usd': '120.00', 'eur': '90.00', 'tix': '20.0'},
+                       'legalities': {'commander': 'legal', 'modern': 'not_legal'}})
+        for c in (cheap, pricey):
+            appmod.carddb.store_card(c)
+
+    def test_price_sort_desc(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery', params={'game': 'mtg', 'sort': 'usd'})
+        assert r.status_code == 200
+        # Default (Auto) direction for price is descending — pricey card first.
+        assert r.text.index('Mana Crypt') < r.text.index('Llanowar Elves')
+
+    def test_price_sort_asc_override(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery',
+                       params={'game': 'mtg', 'sort': 'usd', 'direction': 'asc'})
+        assert r.text.index('Llanowar Elves') < r.text.index('Mana Crypt')
+
+    def test_mtg_offers_scryfall_sorts(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery', params={'game': 'mtg'})
+        for label in ('Mana value', 'EDHREC rank', 'Price: USD', 'Artist name'):
+            assert label in r.text
+
+    def test_other_game_hides_price_sorts(self, appmod, client):
+        appmod.carddb.store_card(make_card('m-1', 'Llanowar Elves', 'dom', '168'))
+        r = client.get('/gallery', params={'game': 'pokemon'})
+        assert 'Mana value' not in r.text
+        assert 'EDHREC rank' not in r.text
+
+    def test_checklist_view_shows_details(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery', params={'game': 'mtg', 'view': 'checklist'})
+        assert r.status_code == 200
+        assert 'checklist' in r.text
+        assert 'Artist' in r.text and 'Chris Rahn' in r.text
+
+    def test_full_view_shows_oracle_and_legalities(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery', params={'game': 'mtg', 'view': 'full'})
+        assert r.status_code == 200
+        assert 'card-full-list' in r.text
+        assert 'Creature — Elf Druid' in r.text
+        assert 'legal-yes' in r.text
+
+    def test_list_view_shows_type(self, appmod, client):
+        self._seed_mtg(appmod)
+        r = client.get('/gallery', params={'game': 'mtg', 'view': 'list'})
+        assert 'card-detail-list' in r.text
+        assert 'Artifact' in r.text
 
 
 class TestMultiGameSearch:
