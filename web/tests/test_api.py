@@ -897,7 +897,7 @@ class TestCacheGameApi:
                 'db_count': 3, 'message': 'stop requested',
             }
 
-        monkeypatch.setattr(appmod.cache_runner, 'start', fake_start)
+        monkeypatch.setattr(appmod.cache_runner, 'enqueue', fake_start)
         monkeypatch.setattr(appmod.cache_runner, 'stop', fake_stop)
         body = client.post(
             '/api/cache-game/mtg/start',
@@ -926,7 +926,59 @@ class TestCacheGameApi:
         assert body['any_running'] is False
         for game in ('mtg', 'pokemon', 'riftbound', 'union-arena'):
             assert game in body['jobs']
-            assert body['jobs'][game]['game'] == game
+
+    def test_status_includes_queue(self, client):
+        body = client.get('/api/cache-game/mtg').json()
+        assert body['queue'] == []
+        assert body['queued_count'] == 0
+
+    def test_start_enqueues_without_running(self, appmod, client, monkeypatch):
+        # Stub the worker so /start only enqueues (no real download thread).
+        appmod.OFFLINE = False
+        monkeypatch.setattr(appmod.cache_runner, '_ensure_worker',
+                            lambda *a, **k: None)
+        r = client.post(
+            '/api/cache-game/mtg/start',
+            content=b'{"filters":{"tags":"art:dragon"}}',
+            headers={'Content-Type': 'application/json'})
+        assert r.status_code == 200
+        body = r.json()
+        assert body['queued_count'] == 1
+        assert body['queue'][0]['label'] == 'art:dragon'
+        # A second, different filter stacks; identical one de-dupes.
+        client.post('/api/cache-game/mtg/start',
+                    content=b'{"filters":{"tags":"art:angel"}}',
+                    headers={'Content-Type': 'application/json'})
+        client.post('/api/cache-game/mtg/start',
+                    content=b'{"filters":{"tags":"art:dragon"}}',
+                    headers={'Content-Type': 'application/json'})
+        body = client.get('/api/cache-game/mtg').json()
+        assert body['queued_count'] == 2
+
+    def test_queue_remove_and_clear(self, appmod, client, monkeypatch):
+        appmod.OFFLINE = False
+        monkeypatch.setattr(appmod.cache_runner, '_ensure_worker',
+                            lambda *a, **k: None)
+        for tag in ('art:dragon', 'art:angel', 'art:demon'):
+            client.post('/api/cache-game/mtg/start',
+                        content=f'{{"filters":{{"tags":"{tag}"}}}}'.encode(),
+                        headers={'Content-Type': 'application/json'})
+        body = client.get('/api/cache-game/mtg').json()
+        assert body['queued_count'] == 3
+        pending_id = body['queue'][1]['id']
+        body = client.post('/api/cache-game/mtg/queue/remove',
+                           json={'id': pending_id}).json()
+        assert body['queued_count'] == 2
+        # Clear pending leaves only the head.
+        body = client.post('/api/cache-game/mtg/queue/clear').json()
+        assert body['queued_count'] == 1
+
+    def test_queue_remove_requires_id(self, client):
+        assert client.post(
+            '/api/cache-game/mtg/queue/remove', json={}).status_code == 422
+
+    def test_resume_blocked_offline(self, client):
+        assert client.post('/api/cache-game/mtg/resume').status_code == 503
 
     def test_cache_log_endpoint(self, client, tmp_path, appmod):
         appmod.CACHE_RUNS_DIR = tmp_path

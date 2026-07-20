@@ -117,11 +117,14 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
       python -m web.server.manage cache-game --game riftbound --status
   ```
 
-  Or use **Search → Offline cache** in the browser (same stop/resume
-  checkpoints under `/data/cache-runs/`). **MTG** and **Pokémon** require
-  filters (set, type, rarity, art/frame flags, tags, regulation, …) so the
-  cache does not pull an entire game; Riftbound/Union Arena can still mirror
-  their full catalogs. Examples:
+  Or use the **Card library → Download & cache** panel in the browser (same
+  stop/resume checkpoints under `/data/cache-runs/`). Each game has a
+  **per-game download queue** (`{game}.queue.json` beside the checkpoint): the
+  worker drains it one job at a time while different games still run in
+  parallel, so you can stack several MTG filters/tags and let them run in
+  sequence. **MTG** and **Pokémon** require filters (set, type, rarity,
+  art/frame flags, tags, regulation, …) so the cache does not pull an entire
+  game; Riftbound/Union Arena can still mirror their full catalogs. Examples:
 
   ```bash
   docker exec -it proxyshop-web python -m web.server.manage cache-game \

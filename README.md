@@ -25,7 +25,7 @@ a Windows worker.
 | Page | Path | What it does |
 |---|---|---|
 | **Editor (Make)** | `/` | Pick a printing, **replace art** (keep frame/details), pan/zoom, preview Compose PNG, or queue Photoshop |
-| **Card library** | `/gallery` | Browse + search cached cards (views, filters, popover, open in editor); online fallback; **Download & cache** panel (selective MTG/Pokémon filters, stop/resume) + offline tag cache |
+| **Card library** | `/gallery` | Browse + search cached cards (views, filters, popover, open in editor); online fallback; **Download & cache** panel (selective MTG/Pokémon filters, **multi-download queue**, stop/resume) + collapsible offline tag cache |
 | **Decks** | `/decks` | Import lists / Moxfield / Archidekt; ZIP of HQ scans; PDF sheets |
 | **Logs** | `/logs` | Live cache-run logs and job chips |
 

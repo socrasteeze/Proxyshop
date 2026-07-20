@@ -1,7 +1,8 @@
 """
 * In-process TCG cache runner for the web UI.
-* Starts cache-game work on a background thread; stop uses the same flag file
-* as the CLI so both can cooperate.
+* Each catalog game has a persisted download queue; a single background worker
+* per game drains it one job at a time (games still run in parallel with each
+* other). Stop uses the same flag file as the CLI so both can cooperate.
 * Captures print_fn output into a per-game ring buffer + rotating log file.
 """
 # Standard Library Imports
@@ -12,24 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 # Local Imports
-from web.shared import games
+from web.shared import download_queue, games
+from web.shared.cache_filters import (
+    build_provider_query, filters_equal, filters_require_selection,
+    normalize_filters, SELECTIVE_GAMES)
 from web.shared.carddb import CardDB
 from web.shared.game_cache import (
-    checkpoint_path, filter_conflict, load_checkpoint, progress_dict,
-    request_stop, run_cache_game)
-
-
-class FilterConflict(Exception):
-    """A saved run with different filters would be clobbered by a new start.
-
-    Carries the existing run's human label so the UI can offer to discard it.
-    """
-
-    def __init__(self, existing_label: str):
-        self.existing_label = existing_label
-        super().__init__(
-            f'A different download is already saved for this game '
-            f'({existing_label}).')
+    checkpoint_path, clear_stop, load_checkpoint, progress_dict,
+    request_stop, reset_checkpoint, run_cache_game, stop_path)
 
 _lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
@@ -49,6 +40,36 @@ def is_running(game: str) -> bool:
     return bool(t and t.is_alive())
 
 
+# ---------------------------------------------------------------------------
+# Status
+# ---------------------------------------------------------------------------
+
+def _queue_view(game: str, items: list[dict], running: bool, runs_dir: Path) -> list[dict]:
+    """Compact per-item view for the UI: the head carries the live state."""
+    ck = load_checkpoint(checkpoint_path(runs_dir, game))
+    out = []
+    for i, it in enumerate(items):
+        if i == 0:
+            if running:
+                state = 'running'
+            elif ck and ck.status == 'stopped':
+                state = 'stopped'
+            elif ck and ck.status == 'done':
+                state = 'done'
+            else:
+                state = 'queued'
+        else:
+            state = 'queued'
+        out.append({
+            'id': it.get('id'),
+            'label': it.get('label') or '',
+            'kind': it.get('kind') or 'png',
+            'state': state,
+            'position': i,
+        })
+    return out
+
+
 def status(game: str, *, db: CardDB, runs_dir: Path) -> dict:
     progress = load_checkpoint(checkpoint_path(runs_dir, game))
     running = is_running(game)
@@ -65,6 +86,9 @@ def status(game: str, *, db: CardDB, runs_dir: Path) -> dict:
     err = _errors.get(game)
     if err and not payload.get('running'):
         payload['error'] = err
+    items = download_queue.load_queue(runs_dir, game)
+    payload['queue'] = _queue_view(game, items, running, runs_dir)
+    payload['queued_count'] = len(items)
     return payload
 
 
@@ -81,6 +105,10 @@ def all_status(*, db: CardDB, runs_dir: Path) -> dict:
             any_running = True
     return {'jobs': jobs, 'any_running': any_running}
 
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
 def _log_path(runs_dir: Path, game: str) -> Path:
     return Path(runs_dir) / f'{game}.log'
@@ -127,86 +155,161 @@ def log_lines(game: str, runs_dir: Path, limit: int = 200) -> list[str]:
     return lines[-limit:]
 
 
-def start(
+# ---------------------------------------------------------------------------
+# Queue worker
+# ---------------------------------------------------------------------------
+
+def _snapshot(game: str, progress) -> None:
+    _live[game] = {
+        'current': progress.current or '',
+        'stored': progress.stored,
+        'images_ok': progress.images_ok,
+        'images_skip': progress.images_skip,
+        'images_fail': progress.images_fail,
+        'total_hint': progress.total_hint,
+    }
+
+
+def _worker(game: str, *, db: CardDB, images_dir: Path, runs_dir: Path) -> None:
+    """Drain the game's queue one item at a time until empty or stopped."""
+    while True:
+        if stop_path(runs_dir, game).is_file():
+            break  # queue paused by a stop request
+        item = download_queue.head(runs_dir, game)
+        if not item:
+            break
+        _errors.pop(game, None)
+        _live.pop(game, None)
+        # Resume the head if a matching, unfinished checkpoint exists (e.g. after
+        # a restart); otherwise start it fresh.
+        norm = normalize_filters(game, item.get('filters'))
+        ck = load_checkpoint(checkpoint_path(runs_dir, game))
+        resume = bool(
+            ck and filters_equal(ck.filters, norm)
+            and ck.status in ('running', 'stopped'))
+        remaining = max(len(download_queue.load_queue(runs_dir, game)) - 1, 0)
+        log(game, runs_dir,
+            f'==> {"resuming" if resume else "starting"}: '
+            f'{item.get("label") or "download"}'
+            + (f'  ({remaining} more queued)' if remaining else ''))
+        try:
+            run_cache_game(
+                db=db,
+                game=game,
+                images_dir=images_dir,
+                runs_dir=runs_dir,
+                fresh=not resume,
+                images_only=bool(item.get('images_only')),
+                filters=item.get('filters'),
+                image_kind=item.get('kind') or 'png',
+                use_signals=False,
+                print_fn=lambda *a, **k: log(game, runs_dir, *a),
+                on_progress=lambda pr: _snapshot(game, pr),
+            )
+        except Exception as e:  # noqa: BLE001 — surface in status for UI
+            _errors[game] = str(e)
+            log(game, runs_dir, f'==> run crashed: {e}')
+            break  # leave the item queued; the user can remove/retry it
+        final = load_checkpoint(checkpoint_path(runs_dir, game))
+        if final and final.status == 'done':
+            download_queue.pop_head(runs_dir, game, item.get('id'))
+            reset_checkpoint(runs_dir, game)  # clean slate for the next item
+            _live.pop(game, None)
+            continue
+        # Stopped by the user → pause here, leaving the head to resume later.
+        break
+    _live.pop(game, None)
+
+
+def _ensure_worker(game: str, *, db: CardDB, images_dir: Path, runs_dir: Path) -> None:
+    with _lock:
+        if is_running(game):
+            return
+        clear_stop(runs_dir, game)
+        _errors.pop(game, None)
+
+        def _target() -> None:
+            try:
+                _worker(game, db=db, images_dir=images_dir, runs_dir=runs_dir)
+            finally:
+                _live.pop(game, None)
+
+        thread = threading.Thread(
+            target=_target, name=f'cache-worker-{game}', daemon=True)
+        _threads[game] = thread
+        thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def enqueue(
     game: str,
     *,
     db: CardDB,
     images_dir: Path,
     runs_dir: Path,
-    fresh: bool = False,
-    images_only: bool = False,
     filters: Optional[dict] = None,
     image_kind: str = 'png',
+    images_only: bool = False,
+    fresh: bool = False,
 ) -> dict:
-    """Start or resume a cache run in the background."""
+    """Add a download to the game's queue and make sure the worker is running.
+
+    Selective games (MTG / Pokémon) require at least one filter. ``fresh``
+    discards the saved checkpoint + pending queue for a clean restart (only
+    honored when nothing is currently running).
+    """
     if game not in games.CATALOG_GAMES:
         raise ValueError(f'Unsupported game {game!r}')
-    # Validate filters synchronously so the UI gets a 422 instead of a silent thread error
-    from web.shared.cache_filters import (
-        SELECTIVE_GAMES, build_provider_query, filters_require_selection,
-        normalize_filters)
     if not images_only and game in SELECTIVE_GAMES:
         norm = normalize_filters(game, filters)
         if filters_require_selection(game, norm):
             raise ValueError(
                 f'{game} cache needs filters (set, type, rarity, art, …) '
                 'so it does not dump the entire catalog')
-        build_provider_query(game, norm)
+        build_provider_query(game, norm)  # raises ValueError on an empty query
 
-    # Detect a filter mismatch up front so the UI can offer to discard the old
-    # run, instead of the background thread crashing with a CLI-flavored error.
-    if not fresh and not images_only:
-        existing = filter_conflict(runs_dir, game, filters)
-        if existing:
-            raise FilterConflict(existing)
+    if fresh and not is_running(game):
+        reset_checkpoint(runs_dir, game)
+        download_queue.save_queue(runs_dir, game, [])
 
-    with _lock:
-        if is_running(game):
-            return status(game, db=db, runs_dir=runs_dir)
-        _errors.pop(game, None)
-        _live.pop(game, None)
+    download_queue.enqueue(
+        runs_dir, game, filters, kind=image_kind, images_only=images_only)
+    _ensure_worker(game, db=db, images_dir=images_dir, runs_dir=runs_dir)
+    return status(game, db=db, runs_dir=runs_dir)
 
-        def _on_progress(progress) -> None:
-            # Cheap in-memory snapshot polled by status(); no disk writes.
-            _live[game] = {
-                'current': progress.current or '',
-                'stored': progress.stored,
-                'images_ok': progress.images_ok,
-                'images_skip': progress.images_skip,
-                'images_fail': progress.images_fail,
-                'total_hint': progress.total_hint,
-            }
 
-        def _target() -> None:
-            log(game, runs_dir, f'==> run started ({game})')
-            try:
-                run_cache_game(
-                    db=db,
-                    game=game,
-                    images_dir=images_dir,
-                    runs_dir=runs_dir,
-                    fresh=fresh,
-                    images_only=images_only,
-                    filters=filters,
-                    image_kind=image_kind,
-                    use_signals=False,
-                    print_fn=lambda *a, **k: log(game, runs_dir, *a),
-                    on_progress=_on_progress,
-                )
-            except Exception as e:  # noqa: BLE001 — surface in status for UI
-                _errors[game] = str(e)
-                log(game, runs_dir, f'==> run crashed: {e}')
-            finally:
-                _live.pop(game, None)
-
-        thread = threading.Thread(
-            target=_target, name=f'cache-game-{game}', daemon=True)
-        _threads[game] = thread
-        thread.start()
+def resume(game: str, *, db: CardDB, images_dir: Path, runs_dir: Path) -> dict:
+    """Restart the worker so it continues draining a paused queue."""
+    if download_queue.head(runs_dir, game):
+        _ensure_worker(game, db=db, images_dir=images_dir, runs_dir=runs_dir)
     return status(game, db=db, runs_dir=runs_dir)
 
 
 def stop(game: str, *, db: CardDB, runs_dir: Path) -> dict:
+    """Pause the queue: stop the active job (resumable) and halt draining."""
     log(game, runs_dir, '==> stop requested')
     request_stop(runs_dir, game)
+    return status(game, db=db, runs_dir=runs_dir)
+
+
+def remove_item(game: str, item_id: str, *, db: CardDB, runs_dir: Path) -> dict:
+    """Remove a queued item. The actively-running head can't be removed — stop
+    it first. Removing a paused head also discards its partial checkpoint."""
+    with _lock:
+        if download_queue.is_head(runs_dir, game, item_id):
+            if is_running(game):
+                return status(game, db=db, runs_dir=runs_dir)  # no-op while live
+            download_queue.remove(runs_dir, game, item_id)
+            reset_checkpoint(runs_dir, game)
+        else:
+            download_queue.remove(runs_dir, game, item_id)
+    return status(game, db=db, runs_dir=runs_dir)
+
+
+def clear(game: str, *, db: CardDB, runs_dir: Path) -> dict:
+    """Drop every pending item, leaving the active/head job untouched."""
+    download_queue.clear_pending(runs_dir, game)
     return status(game, db=db, runs_dir=runs_dir)

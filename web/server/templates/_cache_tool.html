@@ -68,11 +68,11 @@
     </label>
   </div>
 
-  <div id="cached-tags" hidden>
-    <div class="cached-tags-head">Offline tag cache</div>
+  <details id="cached-tags" class="cached-tags" hidden>
+    <summary class="cached-tags-head">Offline tag cache<span id="cached-tags-count" class="cached-tags-count"></span></summary>
     <ul id="cached-tags-list" class="cached-tags-list"></ul>
     <p class="muted" id="cached-tags-empty" hidden>No tags cached yet. Run a download with a Scryfall tag above to add one.</p>
-  </div>
+  </details>
 
   <div id="cache-filters-pokemon" class="cache-filters" hidden>
     <div class="field-row field-row--3">
@@ -131,6 +131,15 @@
   </div>
 
   <p class="muted" id="cache-status" style="margin-top:.7rem">—</p>
+
+  <div id="cache-queue" hidden>
+    <div class="cache-queue-head">
+      <span>Queue<span id="cache-queue-count"></span></span>
+      <button type="button" class="btn-ghost" id="cache-queue-clear" hidden>Clear pending</button>
+    </div>
+    <ol id="cache-queue-list" class="cache-queue-list"></ol>
+  </div>
+
   <p class="muted" style="margin-top:.2rem"><a href="/logs" id="cache-log-link">View live download log →</a></p>
 
 
@@ -337,8 +346,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const running = !!(body && body.running);
     const stopped = body && body.status === 'stopped';
     const done = body && body.status === 'done';
-    btnStart.hidden = running || stopped;
-    btnResume.hidden = !(stopped && !running);
+    const queued = (body && body.queued_count) || 0;
+    // Add to queue is always available (you can stack more while one runs).
+    // Resume appears when the queue is paused (not running) but has work left.
+    btnStart.hidden = false;
+    btnResume.hidden = running || queued === 0;
     btnStop.hidden = !running;
     btnFresh.hidden = !(done || stopped) || running;
     btnStart.disabled = offline;
@@ -375,6 +387,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (g !== game.value) return;
       statusEl.textContent = formatStatus(body);
       applyButtons(body);
+      renderQueue(body);
       refreshJobs();
       if (body.running) {
         if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
@@ -382,17 +395,19 @@ document.addEventListener('DOMContentLoaded', () => {
         clearInterval(pollTimer);
         pollTimer = null;
         // A run just finished — a tag download may have added/updated an entry.
-        if (body.status === 'done') refreshTags();
+        refreshTags();
       }
     } catch (e) {
       statusEl.textContent = 'Could not load cache status.';
     }
   }
 
+  let tagsOpenWired = false;
   async function refreshTags() {
     const box = document.getElementById('cached-tags');
     const list = document.getElementById('cached-tags-list');
     const empty = document.getElementById('cached-tags-empty');
+    const countEl = document.getElementById('cached-tags-count');
     if (!box || !list) return;
     box.hidden = game.value !== 'mtg';
     if (box.hidden) return;
@@ -401,6 +416,18 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/tags');
       if (res.ok) tags = (await res.json()).tags || [];
     } catch (e) { return; }
+    // Collapsed by default once there are a few tags; open state persists.
+    const TAGS_OPEN_KEY = 'proxyshop.tags.open';
+    if (!tagsOpenWired) {
+      tagsOpenWired = true;
+      let saved = null;
+      try { saved = localStorage.getItem(TAGS_OPEN_KEY); } catch (e) { /* private */ }
+      box.open = saved !== null ? saved === '1' : tags.length < 3;
+      box.addEventListener('toggle', () => {
+        try { localStorage.setItem(TAGS_OPEN_KEY, box.open ? '1' : '0'); } catch (e) { /* private */ }
+      });
+    }
+    if (countEl) countEl.textContent = tags.length ? ` · ${tags.length}` : '';
     list.innerHTML = '';
     if (empty) empty.hidden = tags.length > 0;
     tags.forEach((t) => {
@@ -470,7 +497,8 @@ document.addEventListener('DOMContentLoaded', () => {
   async function postCache(path, fresh) {
     const g = game.value;
     const url = `/api/cache-game/${encodeURIComponent(g)}/${path}`;
-    statusEl.textContent = path === 'stop' ? 'Stopping…' : 'Starting…';
+    statusEl.textContent = path === 'stop' ? 'Stopping…'
+      : path === 'start' ? 'Adding to queue…' : 'Resuming…';
     const opts = { method: 'POST' };
     if (path === 'start') {
       opts.headers = { 'Content-Type': 'application/json' };
@@ -482,21 +510,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const res = await fetch(url, opts);
     const body = await res.json().catch(() => ({}));
-    if (res.status === 409 && body.detail && body.detail.conflict) {
-      // A different filtered download is already saved for this game.
-      const name = labels[g] || g;
-      const existing = body.detail.existing_label || 'the previous filters';
-      if (confirm(
-        `${name} already has a saved download for "${existing}".\n\n`
-        + 'Start a NEW download with your current filters?\n'
-        + 'This discards the saved progress for the previous filters.'
-      )) {
-        return postCache('start', true);  // fresh=true → discard & restart
-      }
-      statusEl.textContent =
-        `Kept the saved “${existing}” download — use Resume to continue it.`;
-      return;
-    }
     if (!res.ok) {
       const detail = body.detail;
       statusEl.textContent =
@@ -506,9 +519,70 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     statusEl.textContent = formatStatus(body);
     applyButtons(body);
+    renderQueue(body);
     refreshJobs();
     if (body.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
     setTimeout(refreshStatus, 800);
+  }
+
+  const QUEUE_STATE_LABEL = {
+    running: 'running', stopped: 'paused', done: 'done', queued: 'queued',
+  };
+  function renderQueue(body) {
+    const wrap = document.getElementById('cache-queue');
+    const list = document.getElementById('cache-queue-list');
+    const countEl = document.getElementById('cache-queue-count');
+    const clearBtn = document.getElementById('cache-queue-clear');
+    if (!wrap || !list) return;
+    const items = (body && body.queue) || [];
+    wrap.hidden = items.length === 0;
+    if (countEl) countEl.textContent = items.length ? ` · ${items.length}` : '';
+    if (clearBtn) clearBtn.hidden = items.length <= 1;  // only pending are clearable
+    list.innerHTML = '';
+    items.forEach((it) => {
+      const li = document.createElement('li');
+      li.className = 'cache-queue-item is-' + (it.state || 'queued');
+      const label = document.createElement('span');
+      label.className = 'cache-queue-label';
+      label.textContent = it.label || '(download)';
+      const state = document.createElement('span');
+      state.className = 'cache-queue-state';
+      state.textContent = QUEUE_STATE_LABEL[it.state] || it.state || '';
+      li.append(label, state);
+      // The actively-running head can't be removed (stop it first).
+      if (it.state !== 'running') {
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'btn-ghost cache-queue-remove';
+        rm.textContent = '✕';
+        rm.title = 'Remove from queue';
+        rm.addEventListener('click', () => removeQueueItem(it.id));
+        li.appendChild(rm);
+      }
+      list.appendChild(li);
+    });
+  }
+
+  async function removeQueueItem(id) {
+    const g = game.value;
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/queue/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      applyButtons(body); renderQueue(body); statusEl.textContent = formatStatus(body);
+    } catch (e) { /* best-effort */ }
+  }
+
+  async function clearQueue() {
+    const g = game.value;
+    try {
+      const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/queue/clear`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      applyButtons(body); renderQueue(body);
+    } catch (e) { /* best-effort */ }
   }
 
   function syncFilters(g) {
@@ -516,8 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
     filtPkm.hidden = g !== 'pokemon';
     filtSmall.hidden = !(g === 'riftbound' || g === 'union-arena');
     btnStart.textContent = (g === 'mtg' || g === 'pokemon')
-      ? 'Start download'
-      : 'Download entire catalog';
+      ? 'Add to queue'
+      : 'Queue full catalog';
   }
 
   async function syncPanel() {
@@ -541,12 +615,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   btnStart.addEventListener('click', () => postCache('start', false));
-  btnResume.addEventListener('click', () => postCache('start', false));
+  btnResume.addEventListener('click', () => postCache('resume', false));
+  const clearBtn = document.getElementById('cache-queue-clear');
+  if (clearBtn) clearBtn.addEventListener('click', clearQueue);
   btnFresh.addEventListener('click', () => {
     const name = labels[game.value] || game.value;
     if (!confirm(
       `Restart the ${name} download from scratch?\n\n`
-      + 'This discards the current checkpoint and restarts the download with the filters above.'
+      + 'This clears the queue and saved progress, then queues a fresh download '
+      + 'with the filters above.'
     )) return;
     postCache('start', true);
   });

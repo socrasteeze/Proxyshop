@@ -1749,7 +1749,7 @@ async def api_cache_game_start(
     fresh = bool(body.get('fresh')) if 'fresh' in body else fresh
     images_only = bool(body.get('images_only')) if 'images_only' in body else images_only
     try:
-        return cache_runner.start(
+        return cache_runner.enqueue(
             game,
             db=carddb,
             images_dir=IMAGES_DIR,
@@ -1759,26 +1759,50 @@ async def api_cache_game_start(
             filters=filters,
             image_kind=kind,
         )
-    except cache_runner.FilterConflict as e:
-        # 409: a different saved run exists — UI offers "discard & start new"
-        raise HTTPException(
-            status_code=409,
-            detail={
-                'conflict': True,
-                'existing_label': e.existing_label,
-                'message': (
-                    f'This game already has a saved download for '
-                    f'“{e.existing_label}”. Start a new download with your '
-                    f'current filters (discards the saved progress), or '
-                    f'resume the existing one.'),
-            }) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
+@app.post('/api/cache-game/{game}/resume')
+def api_cache_game_resume(request: Request, game: str):
+    """Restart the worker to continue draining a paused queue."""
+    rate_limit(request, 'cache')
+    game = _require_catalog_game(game)
+    if OFFLINE:
+        raise HTTPException(
+            status_code=503,
+            detail='Offline mode is on — TCG cache needs the live provider')
+    return cache_runner.resume(
+        game, db=carddb, images_dir=IMAGES_DIR, runs_dir=CACHE_RUNS_DIR)
+
+
 @app.post('/api/cache-game/{game}/stop')
 def api_cache_game_stop(request: Request, game: str):
-    """Ask a running cache job to stop after the current card (resumable)."""
+    """Pause the queue: stop the active job after the current card (resumable)."""
     rate_limit(request, 'cache')
     game = _require_catalog_game(game)
     return cache_runner.stop(game, db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.post('/api/cache-game/{game}/queue/remove')
+async def api_cache_queue_remove(request: Request, game: str):
+    """Remove a queued download by id (the running head must be stopped first)."""
+    rate_limit(request, 'cache')
+    game = _require_catalog_game(game)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    item_id = (body.get('id') or '').strip() if isinstance(body, dict) else ''
+    if not item_id:
+        raise HTTPException(status_code=422, detail='id is required')
+    return cache_runner.remove_item(
+        game, item_id, db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.post('/api/cache-game/{game}/queue/clear')
+def api_cache_queue_clear(request: Request, game: str):
+    """Drop all pending downloads, leaving the active job running."""
+    rate_limit(request, 'cache')
+    game = _require_catalog_game(game)
+    return cache_runner.clear(game, db=carddb, runs_dir=CACHE_RUNS_DIR)
