@@ -1057,9 +1057,36 @@ def _card_detail_payload(card_id: str) -> dict:
     }
 
 
+def _placeholder_image(name: str, note: str = 'Image unavailable') -> Response:
+    """A card-shaped SVG placeholder for cards with no available scan.
+
+    Served with 200 so the gallery/popover show a clean placeholder instead of
+    a broken image or a 404 in the network tab.
+    """
+    from xml.sax.saxutils import escape
+    label = escape((name or 'Card')[:40])
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="488" height="680" '
+        'viewBox="0 0 488 680">'
+        '<rect width="488" height="680" rx="26" fill="#1e2027" stroke="#33363f"/>'
+        '<rect x="26" y="26" width="436" height="628" rx="14" fill="#26282f"/>'
+        f'<text x="244" y="330" fill="#e8e9ec" font-family="system-ui,sans-serif" '
+        f'font-size="26" font-weight="600" text-anchor="middle">{label}</text>'
+        f'<text x="244" y="368" fill="#9aa0ab" font-family="system-ui,sans-serif" '
+        f'font-size="16" text-anchor="middle">{escape(note)}</text>'
+        '</svg>')
+    return Response(
+        content=svg, media_type='image/svg+xml',
+        headers={'Cache-Control': 'public, max-age=3600'})
+
+
 @app.get('/api/cards/{card_id}/image')
 def api_card_image(request: Request, card_id: str, kind: str = 'png'):
-    """Download a card's high-quality image (any game), cached on first pull."""
+    """Download a card's high-quality image (any game), cached on first pull.
+
+    Serves a placeholder (not a 404) when a card has no usable scan — some
+    cards (e.g. certain basic Energy) simply have no image in the source.
+    """
     rate_limit(request, 'image')
     if kind not in images.IMAGE_KINDS:
         raise HTTPException(status_code=422, detail=f'Unknown image kind {kind!r}')
@@ -1068,10 +1095,9 @@ def api_card_image(request: Request, card_id: str, kind: str = 'png'):
         raise HTTPException(status_code=404, detail='Card not in the local database')
     path = images.ensure_image(carddb.session, card, kind, IMAGES_DIR, offline=OFFLINE)
     if not path:
-        raise HTTPException(
-            status_code=404,
-            detail='Image unavailable'
-                   + (' (offline mode: only cached images can be served)' if OFFLINE else ''))
+        return _placeholder_image(
+            card.get('name', 'Card'),
+            'Not cached yet' if OFFLINE else 'No image available')
     safe = re.sub(r'[^-\w. \[\]{}()\']', '_', (
         f"{card.get('name', 'card')} [{(card.get('set') or '').upper()}] "
         f"{card.get('collector_number', '')}").strip())

@@ -10,8 +10,6 @@
     <p class="muted" style="margin:0">Live output from offline cache runs.</p>
   </div>
 
-  <div id="logs-jobs" class="jobs-strip" hidden></div>
-
   <div class="game-pills" id="logs-games">
     {% for g in catalog_games %}
     <button type="button" class="job-chip{% if g == game %} is-active{% endif %}"
@@ -29,7 +27,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const page = document.getElementById('logs-page');
   if (!page) return;
   const catalog = (page.dataset.catalogGames || '').split(',').filter(Boolean);
-  const jobsEl = document.getElementById('logs-jobs');
   const statusEl = document.getElementById('logs-status');
   const detailEl = document.getElementById('logs-status-detail');
   const logEl = document.getElementById('logs-log');
@@ -41,6 +38,26 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!pills) return;
     pills.querySelectorAll('[data-game]').forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.game === game);
+    });
+  }
+
+  // Decorate the (always-visible) game selector with a live "running" dot so
+  // the single row shows both which games are downloading and lets you switch
+  // to any game — including idle ones — without a second row of chips.
+  function decoratePills(jobs) {
+    if (!pills) return;
+    pills.querySelectorAll('[data-game]').forEach((btn) => {
+      const st = (jobs || {})[btn.dataset.game];
+      const running = !!(st && st.running);
+      btn.classList.toggle('is-running', running);
+      let dot = btn.querySelector('.chip-dot');
+      if (running && !dot) {
+        dot = document.createElement('span');
+        dot.className = 'chip-dot';
+        btn.prepend(dot);
+      } else if (!running && dot) {
+        dot.remove();
+      }
     });
   }
 
@@ -59,14 +76,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function refreshJobs() {
-    if (!jobsEl || typeof renderJobChips !== 'function') return null;
     try {
       const res = await fetch('/api/cache-jobs');
       if (!res.ok) return null;
       const body = await res.json();
-      renderJobChips(jobsEl, body.jobs || {}, (g) => {
-        selectGame(g);
-      }, game);
+      decoratePills(body.jobs || {});
       return body;
     } catch (e) {
       return null;

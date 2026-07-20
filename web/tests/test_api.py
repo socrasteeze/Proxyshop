@@ -610,6 +610,20 @@ class TestCardViews:
         assert client.get('/api/cards/id-1/image',
                           params={'kind': 'huge'}).status_code == 422
 
+    def test_card_image_placeholder_when_no_art(self, appmod, client):
+        # Some cards (e.g. basic Pokemon Energy) have no image at all. The
+        # endpoint serves a card-shaped SVG placeholder rather than 404ing so
+        # the gallery/detail views still render a tile.
+        appmod.carddb.store_card(make_card('id-1', 'Basic Energy', 'svi', '1'))
+        appmod.OFFLINE = False
+        res = client.get('/api/cards/id-1/image', params={'kind': 'png'})
+        assert res.status_code == 200
+        assert res.headers['content-type'].startswith('image/svg+xml')
+        assert 'Basic Energy' in res.text
+
+    def test_card_image_unknown_id_still_404(self, client):
+        assert client.get('/api/cards/nope/image').status_code == 404
+
 
 class TestDeckImport:
 
