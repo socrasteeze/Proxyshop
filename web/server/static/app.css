@@ -1044,9 +1044,12 @@ body.modal-open { overflow: hidden; }
   min-height: calc(100vh - 6rem);
 }
 .logs-page .cache-log {
-  max-height: none;
-  flex: 1;
-  min-height: 24rem;
+  flex: 1 1 auto;
+  min-height: 18rem;
+  /* Cap to the viewport so the log scrolls inside its own box instead of
+     growing the whole page as more lines stream in. */
+  max-height: calc(100vh - 16rem);
+  overflow: auto;
 }
 .game-pills {
   display: flex;
