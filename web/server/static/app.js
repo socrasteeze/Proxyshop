@@ -70,7 +70,11 @@ function wireCardTypeahead(input, opts = {}) {
   if (!input) return;
   const getGame = opts.getGame || (() => 'mtg');
   const onSelect = opts.onSelect || (() => {});
-  const minChars = opts.minChars ?? 2;
+  // Touch devices: wait longer and require more characters before fetching, so
+  // the dropdown doesn't pop up mid-word while you're still typing on a phone.
+  const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const minChars = opts.minChars ?? (isTouch ? 3 : 2);
+  const debounceMs = isTouch ? 550 : 220;
   const limit = opts.limit ?? 12;
 
   const wrap = document.createElement('div');
@@ -168,7 +172,7 @@ function wireCardTypeahead(input, opts = {}) {
       } catch (e) {
         if (e.name !== 'AbortError') { /* best-effort */ }
       }
-    }, 220);
+    }, debounceMs);
   });
 
   input.addEventListener('keydown', (ev) => {

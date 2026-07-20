@@ -113,6 +113,11 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(124, 92, 255, .22);
 }
+/* iOS Safari zooms in on focus for any field under 16px. Bump form fields to
+   16px on small screens so focusing the card-name box doesn't zoom the page. */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px; }
+}
 textarea {
   min-height: 5rem;
   font-family: ui-monospace, monospace;

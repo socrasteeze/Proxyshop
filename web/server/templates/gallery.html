@@ -90,20 +90,6 @@
     });
   });
   </script>
-  <div class="gallery-chips">
-    <a class="pill {% if not game %}pill-active{% endif %}"
-       href="{{ page_url(1, game='') }}">
-      All · {{ '{:,}'.format(total_all) }}
-    </a>
-    {% for g, label in games.items() %}
-    {% if counts.get(g) %}
-    <a class="pill {% if game == g %}pill-active{% endif %}"
-       href="{{ page_url(1, game=g) }}">
-      {{ label }} · {{ '{:,}'.format(counts[g]) }}
-    </a>
-    {% endif %}
-    {% endfor %}
-  </div>
 </div>
 
 <div class="panel">
