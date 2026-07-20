@@ -205,13 +205,6 @@
           {% if c.detail.artist %}· Illus. {{ c.detail.artist }}{% endif %}
           · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}
         </div>
-        {% if is_mtg and (c.detail.usd or c.detail.eur or c.detail.tix) %}
-        <div class="full-prices">
-          {% if c.detail.usd %}<span>${{ c.detail.usd }}</span>{% endif %}
-          {% if c.detail.eur %}<span>€{{ c.detail.eur }}</span>{% endif %}
-          {% if c.detail.tix %}<span>{{ c.detail.tix }} TIX</span>{% endif %}
-        </div>
-        {% endif %}
         {% if is_mtg and c.detail.legalities %}
         <div class="full-legalities">
           {% for fmt in ['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'commander', 'pauper'] %}
@@ -234,11 +227,6 @@
           {% for p in c.prints %}
           <tr class="{% if p.current %}is-current{% endif %}">
             <td class="fp-name"><a href="/card/{{ p.id }}">{{ p.set_name or (p.set or '')|upper }} #{{ p.collector_number }}</a></td>
-            {% if is_mtg %}
-            <td class="num">{% if p.usd %}${{ p.usd }}{% endif %}</td>
-            <td class="num">{% if p.eur %}€{{ p.eur }}{% endif %}</td>
-            <td class="num">{{ p.tix or '' }}</td>
-            {% endif %}
           </tr>
           {% endfor %}
         </table>

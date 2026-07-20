@@ -414,7 +414,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 }
 .full-row {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 260px);
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 210px);
   gap: 1.25rem;
   padding: 1rem;
   border: 1px solid var(--border);
@@ -442,7 +442,6 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 .full-flavor { font-style: italic; line-height: 1.4; }
 .full-stat { font-weight: 700; }
 .full-meta { font-size: .85rem; }
-.full-prices { display: flex; gap: .9rem; font-weight: 600; }
 .full-legalities { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .2rem; }
 .full-legalities .legal {
   font-size: .72rem;
@@ -458,38 +457,38 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 /* Prints panel (Scryfall-style "Prints" list beside the Full card). */
 .full-prints {
   align-self: start;
-  border: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, var(--text));
   border-radius: 10px;
   padding: .7rem .8rem;
-  background: rgba(255, 255, 255, .02);
+  background: rgba(255, 255, 255, .05);
   font-size: .82rem;
 }
 .fp-head { display: flex; flex-direction: column; gap: .1rem; margin-bottom: .5rem; }
-.fp-set { font-weight: 700; }
+.fp-set { font-weight: 700; color: var(--text); }
 .fp-label {
   text-transform: uppercase;
   letter-spacing: .05em;
   font-size: .7rem;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  color: color-mix(in srgb, var(--muted) 40%, var(--text));
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, var(--text));
   padding-bottom: .25rem;
   margin-bottom: .25rem;
 }
-.full-prints { min-width: 0; overflow: hidden; }
 .fp-table { width: 100%; border-collapse: collapse; }
-.fp-table td { padding: .2rem .3rem; vertical-align: top; }
-.fp-table .num {
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
+.fp-table td { padding: .28rem .3rem; vertical-align: top; }
 /* Long (e.g. Japanese) set names wrap inside the fixed-width panel. */
 .fp-name { overflow-wrap: anywhere; word-break: break-word; }
 .fp-name a { color: var(--text); text-decoration: none; }
 .fp-name a:hover { color: var(--accent); }
-.fp-table .is-current { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.fp-table .is-current .fp-name a { font-weight: 700; color: var(--accent); }
+.fp-table tr + tr td { border-top: 1px solid rgba(255, 255, 255, .05); }
+.fp-table .is-current {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.fp-table .is-current .fp-name a { font-weight: 700; color: var(--text); }
 .fp-all {
   display: inline-block;
   margin-top: .45rem;
@@ -743,9 +742,13 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   inset: 0;
   z-index: 1000;
   display: flex;
-  align-items: center;
+  /* Anchor to a fixed top offset rather than centering: switching between
+     prints re-renders the body at a different height, and centering would
+     re-center on every switch — making the whole popover jump. Top-anchoring
+     keeps the header still and lets content grow downward. */
+  align-items: flex-start;
   justify-content: center;
-  padding: 1rem;
+  padding: clamp(1rem, 6vh, 4.5rem) 1rem 1rem;
   pointer-events: none;
 }
 .card-modal-backdrop {
@@ -760,7 +763,8 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   position: relative;
   z-index: 1;
   width: min(920px, 100%);
-  max-height: min(92vh, 900px);
+  /* Leave room for the top offset + bottom gap so tall cards stay on-screen. */
+  max-height: calc(100vh - clamp(2rem, 12vh, 5.5rem));
   overflow: auto;
   background: var(--panel);
   border: 1px solid var(--border);
