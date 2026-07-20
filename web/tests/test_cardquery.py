@@ -115,3 +115,46 @@ class TestFieldSearch:
         cards, total = carddb.list_gallery(game='pokemon', q='supertype:trainer')
         assert total == 1
         assert cards[0]['id'] == 'pkm-1'
+
+    def _seed_riftbound(self, carddb):
+        annie = make_card('rb-1', 'Annie, Fiery', 'ogs', '1')
+        annie['game'] = 'riftbound'
+        annie['provider_data'] = {
+            'cardType': 'Unit', 'domain': 'Fury', 'rarity': 'Epic',
+            'description': 'Deals bonus damage.', 'artist': 'Jane Doe',
+            'flavorText': 'Burn it all.', 'riftbound_id': 'ogs-001'}
+        for c in (annie,):
+            carddb.store_card(c, game='riftbound')
+
+    def test_riftbound_field_search(self, carddb):
+        self._seed_riftbound(carddb)
+        assert [c['id'] for c in carddb.search_local('t:unit', game='riftbound')] == ['rb-1']
+        assert [c['id'] for c in carddb.search_local('domain:fury', game='riftbound')] == ['rb-1']
+        assert [c['id'] for c in carddb.search_local('o:damage', game='riftbound')] == ['rb-1']
+        assert [c['id'] for c in carddb.search_local('artist:jane', game='riftbound')] == ['rb-1']
+
+    def test_union_arena_name_set_search(self, carddb):
+        ua = make_card('ua-1', 'Gon Freecss', 'UE02BT', 'HTR-1-005')
+        ua['game'] = 'union-arena'
+        ua['set_name'] = 'Hunter x Hunter'
+        ua['provider_data'] = {'card_no': 'UE02BT/HTR-1-005'}
+        carddb.store_card(ua, game='union-arena')
+        assert [c['id'] for c in carddb.search_local('gon', game='union-arena')] == ['ua-1']
+        assert [c['id'] for c in carddb.search_local('set:hunter', game='union-arena')] == ['ua-1']
+
+    def test_cross_game_keyword_search(self, carddb):
+        self._seed_mtg(carddb)
+        self._seed_pokemon(carddb)
+        self._seed_riftbound(carddb)
+        # A field query with no game selected uses the universal field set
+        ids = {c['id'] for c in carddb.search_local('t:creature', game=None)}
+        assert ids == {'m-2'}  # only the MTG creature
+        # Keyword 'unit' matches the Riftbound cardType across games
+        ids = {c['id'] for c in carddb.search_local('o:damage', game=None)}
+        assert 'm-1' in ids and 'rb-1' in ids  # MTG oracle + Riftbound description
+
+    def test_gallery_cross_game_field_search(self, carddb):
+        self._seed_mtg(carddb)
+        self._seed_riftbound(carddb)
+        cards, total = carddb.list_gallery(q='t:unit')  # no game → cross-game
+        assert total == 1 and cards[0]['id'] == 'rb-1'

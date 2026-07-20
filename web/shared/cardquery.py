@@ -60,15 +60,42 @@ _SEARCH_FIELDS: dict[str, dict[str, str]] = {
         'type': "lower(COALESCE(json_extract(json,'$.provider_data.cardType'),''))",
         'domain': "lower(COALESCE(json_extract(json,'$.provider_data.domain'),''))",
         'oracle': "lower(COALESCE(json_extract(json,'$.provider_data.description'),''))",
+        'flavor': "lower(COALESCE(json_extract(json,'$.provider_data.flavorText'),''))",
         'rarity': "lower(COALESCE(json_extract(json,'$.provider_data.rarity'),''))",
-        'set': "lower(COALESCE(set_code,''))",
+        'artist': "lower(COALESCE(json_extract(json,'$.provider_data.artist'),''))",
+        'set': "lower(COALESCE(set_code,'') || ' ' || "
+               "COALESCE(json_extract(json,'$.set_name'),''))",
         'number': "lower(COALESCE(collector_number,''))",
     },
     'union-arena': {
         'name': "lower(name)",
-        'set': "lower(COALESCE(set_code,''))",
+        'set': "lower(COALESCE(set_code,'') || ' ' || "
+               "COALESCE(json_extract(json,'$.set_name'),''))",
         'number': "lower(COALESCE(collector_number,''))",
     },
+}
+
+# Cross-game ('All games') field set: unions each game's json paths so a
+# keyword or field query works without knowing the game. json_extract returns
+# NULL for absent paths, so COALESCE keeps every row searchable.
+_SEARCH_FIELDS['all'] = {
+    'name': "lower(name)",
+    'type': (
+        "lower(COALESCE(json_extract(json,'$.type_line'),'') || ' ' "
+        "|| COALESCE(json_extract(json,'$.provider_data.supertype'),'') || ' ' "
+        "|| COALESCE(json_extract(json,'$.provider_data.cardType'),''))"),
+    'oracle': (
+        "lower(COALESCE(json_extract(json,'$.oracle_text'),'') || ' ' "
+        "|| COALESCE(json_extract(json,'$.provider_data.description'),''))"),
+    'rarity': (
+        "lower(COALESCE(json_extract(json,'$.rarity'),'') || ' ' "
+        "|| COALESCE(json_extract(json,'$.provider_data.rarity'),''))"),
+    'artist': (
+        "lower(COALESCE(json_extract(json,'$.artist'),'') || ' ' "
+        "|| COALESCE(json_extract(json,'$.provider_data.artist'),''))"),
+    'set': "lower(COALESCE(set_code,'') || ' ' || "
+           "COALESCE(json_extract(json,'$.set_name'),''))",
+    'number': "lower(COALESCE(collector_number,''))",
 }
 
 # Short aliases → canonical field names (Scryfall-ish where it makes sense).
@@ -106,16 +133,24 @@ class ParsedQuery:
         return not self.terms and not self.fields
 
 
-def parse_query(text: str, game: str) -> ParsedQuery:
+def _resolve_game(game: Optional[str]) -> str:
+    """Map a game selector to a field-set key. None/''/'all' → cross-game."""
+    g = (game or 'all').strip().lower()
+    if g in ('', 'all'):
+        return 'all'
+    return g if g in _SEARCH_FIELDS else 'mtg'
+
+
+def parse_query(text: str, game: Optional[str]) -> ParsedQuery:
     """Parse a query string into free terms + field filters for a game.
 
     A `field:value` token is treated as a field filter only when the field is
     known for the game; otherwise the whole token is kept as free text (so a
-    stray colon never swallows the query).
+    stray colon never swallows the query). game=None/''/'all' uses the
+    cross-game field set.
     """
     parsed = ParsedQuery()
-    game = (game or 'mtg').lower()
-    known = _SEARCH_FIELDS.get(game, _SEARCH_FIELDS['mtg'])
+    known = _SEARCH_FIELDS[_resolve_game(game)]
     for m in _TOKEN_RE.finditer(text or ''):
         field = (m.group('field') or '').lower()
         value = m.group('qval')
@@ -138,18 +173,19 @@ def parse_query(text: str, game: str) -> ParsedQuery:
 
 def _blob_expr(game: str) -> str:
     """SQL expression concatenating every searchable field for the game."""
-    fields = _SEARCH_FIELDS.get(game, _SEARCH_FIELDS['mtg'])
+    fields = _SEARCH_FIELDS[_resolve_game(game)]
     return " || ' ' || ".join(fields.values())
 
 
-def build_where(parsed: ParsedQuery, game: str) -> tuple[str, list]:
+def build_where(parsed: ParsedQuery, game: Optional[str]) -> tuple[str, list]:
     """Return (sql_fragment, params) — an ANDed WHERE body (no leading AND).
 
     Free terms match the whole per-game blob; field filters match that field's
-    expression. Empty parsed query yields ('1=1', []).
+    expression. game=None/''/'all' searches across every game. Empty parsed
+    query yields ('1=1', []).
     """
-    game = (game or 'mtg').lower()
-    fields = _SEARCH_FIELDS.get(game, _SEARCH_FIELDS['mtg'])
+    game = _resolve_game(game)
+    fields = _SEARCH_FIELDS[game]
     clauses: list[str] = []
     params: list = []
     # Free text matches the whole (unfolded) blob; the accent-insensitive FTS

@@ -134,6 +134,35 @@ class TestStoreAndLookup:
         assert cards[0]['id'] == 'pkm-2'
         assert cards[0]['art_count'] == 2
 
+    def test_list_gallery_combine_riftbound_language_variants(self, carddb):
+        # EN + JA + KO variants share riftbound_id → one group when combined,
+        # even though their names differ per language.
+        def rb(cid, name, lang):
+            c = make_card(cid, name, 'ogs', '1', lang=lang)
+            c['game'] = 'riftbound'
+            c['oracle_id'] = None
+            c['provider_data'] = {'riftbound_id': 'ogs-001'}
+            return c
+        carddb.store_card(rb('rb-1', 'Annie, Fiery', 'en'), game='riftbound')
+        carddb.store_card(rb('rb-ja-1', 'アニー', 'ja'), game='riftbound')
+        carddb.store_card(rb('rb-ko-1', '애니', 'ko'), game='riftbound')
+        cards, total = carddb.list_gallery(game='riftbound', group_arts=True)
+        assert total == 1
+        assert cards[0]['art_count'] == 3
+
+    def test_list_gallery_combine_union_arena_by_card_no(self, carddb):
+        def ua(cid, name, lang):
+            c = make_card(cid, name, 'UE02BT', 'HTR-1-005', lang=lang)
+            c['game'] = 'union-arena'
+            c['oracle_id'] = None
+            c['provider_data'] = {'card_no': 'UE02BT/HTR-1-005'}
+            return c
+        carddb.store_card(ua('ua-1', 'Gon Freecss', 'en'), game='union-arena')
+        carddb.store_card(ua('ua-ja-1', 'ゴン＝フリークス', 'ja'), game='union-arena')
+        cards, total = carddb.list_gallery(game='union-arena', group_arts=True)
+        assert total == 1
+        assert cards[0]['art_count'] == 2
+
     def test_list_gallery_combine_paginates_groups(self, carddb):
         for i in range(5):
             carddb.store_card(make_card(

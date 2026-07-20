@@ -534,10 +534,20 @@ class CardDB:
             'SELECT game, COUNT(*) AS n FROM cards GROUP BY game').fetchall()
         return {str(r['game']): int(r['n']) for r in rows}
 
-    # MTG: oracle_id (fallback to id). Other games: game + lower(name).
+    # Language-independent grouping key so all printings/langs of one card
+    # collapse together in the "combine arts" view:
+    #   MTG          → oracle_id (Scryfall's cross-print id)
+    #   Riftbound    → provider_data.riftbound_id (shared by EN/JA/KO variants)
+    #   Union Arena  → provider_data.card_no (shared by EN/JP variants)
+    #   others       → game + lower(name)
     _ART_GROUP_EXPR = (
-        "CASE WHEN game = 'mtg' THEN COALESCE(NULLIF(oracle_id, ''), id) "
-        "ELSE (game || '|' || lower(name)) END"
+        "CASE"
+        " WHEN game = 'mtg' THEN COALESCE(NULLIF(oracle_id, ''), id)"
+        " WHEN game = 'riftbound' THEN 'riftbound|' || lower(COALESCE("
+        "NULLIF(json_extract(json,'$.provider_data.riftbound_id'), ''), name))"
+        " WHEN game = 'union-arena' THEN 'union-arena|' || lower(COALESCE("
+        "NULLIF(json_extract(json,'$.provider_data.card_no'), ''), name))"
+        " ELSE (game || '|' || lower(name)) END"
     )
 
     def list_gallery(
@@ -570,16 +580,13 @@ class CardDB:
             where.append('game=?')
             params.append(game)
         if q.strip():
-            # Game-scoped searches get full field/keyword syntax (t:, o:,
-            # supertype:, 'supporter', …); cross-game falls back to name.
-            if game:
-                parsed = cardquery.parse_query(q, game)
-                where_sql, where_params = cardquery.build_where(parsed, game)
-                where.append(f'({where_sql})')
-                params.extend(where_params)
-            else:
-                where.append('name LIKE ? COLLATE NOCASE')
-                params.append(f'%{q.strip()}%')
+            # Same field/keyword matching as the Search-cards box — game-scoped
+            # (t:, o:, supertype:, 'supporter', …) or cross-game via the
+            # universal field set when no game is selected.
+            parsed = cardquery.parse_query(q, game)
+            where_sql, where_params = cardquery.build_where(parsed, game)
+            where.append(f'({where_sql})')
+            params.extend(where_params)
         if set_code.strip():
             where.append('set_code=?')
             params.append(set_code.strip().lower())
@@ -685,13 +692,14 @@ class CardDB:
         rank, rank_params = cardquery.name_rank_sql(text)
         order = f'{rank} ASC, name COLLATE NOCASE ASC, released_at DESC'
 
-        parsed = cardquery.parse_query(text, game or 'mtg')
-        # Cross-game or field-syntax queries take the structured path; a simple
-        # single-word name query keeps the fast FTS path below.
-        structured = bool(game) and (parsed.fields or len(parsed.terms) != 1)
+        parsed = cardquery.parse_query(text, game)
+        # Field-syntax or multi-word queries take the structured path (works for
+        # a specific game or cross-game); a simple single-word query keeps the
+        # fast FTS path below.
+        structured = bool(parsed.fields) or len(parsed.terms) != 1
 
         if structured:
-            where_sql, where_params = cardquery.build_where(parsed, game or 'mtg')
+            where_sql, where_params = cardquery.build_where(parsed, game)
             rows = con.execute(
                 f"""
                 SELECT id, game, json FROM cards
@@ -731,7 +739,7 @@ class CardDB:
             return results[:limit]
 
         # Fallback / top-up: blob LIKE scan (covers mid-word + field matches).
-        blob_sql, blob_params = cardquery.build_where(parsed, game or 'mtg')
+        blob_sql, blob_params = cardquery.build_where(parsed, game)
         rows = con.execute(
             f"""
             SELECT id, game, json FROM cards
