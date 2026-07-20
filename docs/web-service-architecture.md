@@ -6,8 +6,11 @@ runs a **Compose** engine (Pillow) so MTG / Pokémon / Riftbound proxies can be
 previewed and downloaded without Windows.
 
 Pages: **Editor** (`/`), **Card library** (`/gallery`), **Decks** (`/decks`),
-**Search** (`/search`), **Logs** (`/logs`). See the
-[README Web section](../README.md#-proxyshop-web-nas) for a short overview.
+**Logs** (`/logs`). The Card library is the single search/browse surface: local
+browse with online fallback, plus the **Download & cache** tool and the offline
+tag cache. The old `/search` page is retired and 307-redirects to `/gallery`.
+See the [README Web section](../README.md#-proxyshop-web-nas) for a short
+overview.
 
 ## Why this shape?
 

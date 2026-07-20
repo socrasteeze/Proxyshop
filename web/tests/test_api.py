@@ -835,22 +835,20 @@ class TestTagCache:
     def test_tags_delete_requires_tag(self, client):
         assert client.post('/api/tags/delete', json={}).status_code == 422
 
-    def test_search_page_offers_to_cache_tag(self, appmod, client):
+    def test_library_offers_to_cache_uncached_tag(self, appmod, client):
+        # An uncached tag in the Card Library surfaces the cache affordance
+        # (online) rather than a live fetch.
         appmod.OFFLINE = False
-        appmod.carddb.offline = False
-
-        class FakeResponse:
-            status_code = 200
-            def json(self):
-                return {'object': 'list', 'data': []}
-
-        class FakeSession:
-            def get(self, url, **kwargs):
-                return FakeResponse()
-
-        appmod.carddb._session = FakeSession()
-        html = client.get('/search', params={'q': 'art:dragon', 'game': 'mtg'}).text
+        html = client.get('/gallery', params={'q': 'art:dragon', 'game': 'mtg'}).text
         assert 'Cache this tag for offline' in html
+
+    def test_search_redirects_to_library(self, client):
+        # /search is retired → redirects to the consolidated Card Library.
+        res = client.get('/search', params={'q': 'bolt', 'game': 'mtg'},
+                         follow_redirects=False)
+        assert res.status_code in (302, 307)
+        assert res.headers['location'].startswith('/gallery')
+        assert 'q=bolt' in res.headers['location']
 
 
 class TestCacheGameApi:
@@ -911,13 +909,15 @@ class TestCacheGameApi:
         assert body['status'] == 'stopped'
         assert stopped['n'] == 1
 
-    def test_search_page_includes_cache_panel(self, client):
-        res = client.get('/search', params={'game': 'riftbound'})
+    def test_card_library_includes_cache_panel(self, client):
+        res = client.get('/gallery', params={'game': 'riftbound'})
         assert res.status_code == 200
         assert 'id="cache-panel"' in res.text
         assert 'Download' in res.text
-        assert 'id="cache-log"' in res.text
         assert 'cache-jobs' in res.text
+        # The live log now lives on the Logs tab, linked from the cache panel.
+        assert 'id="cache-log-link"' in res.text
+        assert 'id="cache-log"' not in res.text
 
     def test_cache_jobs_endpoint(self, client):
         body = client.get('/api/cache-jobs').json()

@@ -447,6 +447,37 @@ def page_gallery(
         group_arts=group_arts,
         detail=want_detail,
     )
+
+    # When an explicit, game-scoped search finds nothing locally, fall back to
+    # the online provider (Scryfall / Pokémon / …) exactly like the old Search
+    # page — fetch, cache, and re-query so the hits render in the chosen view.
+    # Tag queries never do a live fetch here (they'd hammer the API and their
+    # membership can't be derived from a page); they surface a "cache this tag"
+    # banner instead. Never fires for the cross-game ('All') view or offline.
+    search_source = 'local'
+    tag_query = bool(q.strip()) and game == 'mtg' and cardquery.has_tag_op(q)
+    tag_uncached = bool(
+        tag_query and not carddb.get_tag_cache(cardquery.normalize_tag(q)))
+    if q.strip() and game and total == 0 and not tag_query and not OFFLINE:
+        try:
+            fetched, search_source = _search_cards(q, per_page, game)
+        except HTTPException:
+            fetched, search_source = [], 'local'
+        if fetched:
+            page = 1
+            cards, total = carddb.list_gallery(
+                game=game or None,
+                q=effective_q,
+                set_code=set,
+                set_codes=series_sets if not set else None,
+                offset=0,
+                limit=per_page,
+                sort=sort,
+                direction=resolved_dir,
+                group_arts=group_arts,
+                detail=want_detail,
+            )
+
     counts = carddb.counts_by_game()
     pages = max(1, (total + per_page - 1) // per_page) if total else 1
     if page > pages:
@@ -557,6 +588,11 @@ def page_gallery(
         'games': games.GAME_LABELS,
         'page_url': page_url,
         'stats': carddb.stats(),
+        'catalog_games': list(games.CATALOG_GAMES),
+        'offline': OFFLINE,
+        'search_source': search_source,
+        'tag_query': tag_query,
+        'tag_uncached': tag_uncached,
     })
 
 
@@ -653,29 +689,21 @@ def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], st
     return results, 'live'
 
 
-@app.get('/search', response_class=HTMLResponse)
-def page_search(request: Request, q: str = '', game: str = 'mtg'):
-    game = (game or '').strip().lower()
-    if game == 'all':
-        game = ''
-    results, source, error = [], 'local', None
-    if len(q) >= 2:
-        try:
-            results, source = _search_cards(q, 60, game)
-        except HTTPException as e:
-            error = e.detail  # show provider problems inline instead of a bare 502
-    prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
-    # Tag-query hints: is this a Scryfall Tagger query, and is it already
-    # cached offline? Drives the "cache this tag for offline" affordance.
-    is_tag_query = bool(q) and game == 'mtg' and cardquery.has_tag_op(q)
-    tag_cached = bool(
-        is_tag_query and carddb.get_tag_cache(cardquery.normalize_tag(q)))
-    return templates.TemplateResponse(request, 'search.html', {
-        'q': q, 'game': game, 'games': games.GAME_LABELS,
-        'catalog_games': list(games.CATALOG_GAMES),
-        'results': results, 'source': source, 'prices': prices, 'error': error,
-        'is_tag_query': is_tag_query, 'tag_cached': tag_cached, 'tag_query': q,
-        'offline': OFFLINE, 'stats': carddb.stats()})
+@app.get('/search')
+def page_search(request: Request, q: str = '', game: str = ''):
+    """Card search + the download/cache tool now live on the Card Library.
+
+    Kept as a redirect so old links, bookmarks, and the nav badge still resolve.
+    """
+    from urllib.parse import urlencode
+    params = {}
+    if q:
+        params['q'] = q
+    g = (game or '').strip().lower()
+    if g and g != 'all':
+        params['game'] = g
+    target = '/gallery' + (('?' + urlencode(params)) if params else '')
+    return RedirectResponse(target, status_code=307)
 
 
 @app.get('/logs', response_class=HTMLResponse)

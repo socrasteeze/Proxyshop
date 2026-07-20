@@ -25,10 +25,11 @@ a Windows worker.
 | Page | Path | What it does |
 |---|---|---|
 | **Editor (Make)** | `/` | Pick a printing, **replace art** (keep frame/details), pan/zoom, preview Compose PNG, or queue Photoshop |
-| **Card library** | `/gallery` | Browse cached cards (views, filters, popover, open in editor) |
+| **Card library** | `/gallery` | Browse + search cached cards (views, filters, popover, open in editor); online fallback; **Download & cache** panel (selective MTG/Pokémon filters, stop/resume) + offline tag cache |
 | **Decks** | `/decks` | Import lists / Moxfield / Archidekt; ZIP of HQ scans; PDF sheets |
-| **Search** | `/search` | Live + local search; **Offline cache** panel (selective MTG/Pokémon filters, stop/resume) |
 | **Logs** | `/logs` | Live cache-run logs and job chips |
+
+_(`/search` is retired and redirects to the Card library.)_
 
 **Supported games (web):** MTG, Pokémon, Union Arena, Riftbound. Photoshop
 rendering covers MTG (and Pokémon when PSDs are installed). **Compose** works

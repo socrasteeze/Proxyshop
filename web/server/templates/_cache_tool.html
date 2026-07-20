@@ -1,37 +1,10 @@
-{% extends "base.html" %}
-{% block title %}Search cards — Proxyshop{% endblock %}
-{% block content %}
-
-<div class="panel">
-  <h2>Search cards</h2>
-  <p class="muted">{{ '{:,}'.format(stats.cards) }} cards in the local database
-    {% if stats.bulk_imported_at %} · MTG bulk import {{ stats.bulk_imported_at }}{% endif %}
-    · results found online are saved locally automatically</p>
-  <div class="picker-row">
-    <label>Game
-      <select name="game" id="search-game">
-        <option value="" {% if not game %}selected{% endif %}>All games (local database)</option>
-        {% for g, label in games.items() %}
-        <option value="{{ g }}" {% if g == game %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Card name
-      <input id="search-q" name="q" value="{{ q }}" placeholder="Name, or keyword / t:creature o:draw supertype:trainer…" autocomplete="off" minlength="2" title="Plain text matches name, type, rules text and subtypes (e.g. 'supporter'). Field syntax: t: type, o: rules text, r: rarity, set:, artist:, supertype:, subtype:">
-    </label>
-  </div>
-  <p class="muted" style="margin-top:.7rem">Selecting a suggestion opens the card page. Press Enter to show all matching cards.</p>
-  <form id="search-form" action="/search" method="get" hidden>
-    <input type="hidden" name="game" id="search-form-game" value="{{ game }}">
-    <input type="hidden" name="q" id="search-form-q" value="{{ q }}">
-  </form>
-</div>
-
+{# Download & cache tool — shared by Card Library. Drives its per-game
+   filters off the #gallery-game selector; live log lives on the Logs tab. #}
 <div class="panel" id="cache-panel" hidden
      data-catalog-games="{{ catalog_games|join(',') }}"
      data-offline="{{ '1' if offline else '0' }}">
   <div class="panel-header">
-    <h2>Download to local cache</h2>
+    <h2>Download &amp; cache</h2>
     <div class="btn-row">
       <button type="button" id="cache-start">Start download</button>
       <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume download</button>
@@ -155,11 +128,8 @@
   </div>
 
   <p class="muted" id="cache-status" style="margin-top:.7rem">—</p>
+  <p class="muted" style="margin-top:.2rem"><a href="/logs" id="cache-log-link">View live download log →</a></p>
 
-  <details id="cache-log-wrap" class="cache-log-wrap">
-    <summary>Download log</summary>
-    <pre id="cache-log" class="cache-log"></pre>
-  </details>
 
   <details class="advanced-block cache-advanced">
     <summary>Advanced options</summary>
@@ -170,86 +140,15 @@
   </details>
 </div>
 
-{% if q %}
-<div class="panel">
-  <h2>Results for “{{ q }}” <span class="pill">{{ games.get(game, 'All games') }}</span></h2>
-  {% if error %}
-  <p style="color: var(--err)">{{ error }}</p>
-  {% endif %}
-  {% if is_tag_query %}
-    {% if source == 'tag-cache' %}
-    <p class="muted">✓ Resolved from your offline tag cache.
-      {% if not offline %}<button type="button" class="btn-ghost tag-inline-btn" id="cache-this-tag" data-tag="{{ tag_query }}">Refresh from Scryfall</button>{% endif %}
-    </p>
-    {% elif source == 'scryfall' %}
-    <p class="muted">Live Scryfall tag results — not cached locally yet.
-      <button type="button" class="btn-ghost tag-inline-btn" id="cache-this-tag" data-tag="{{ tag_query }}">Cache this tag for offline</button>
-    </p>
-    {% elif source == 'tag-uncached' %}
-    <p class="muted">This tag isn’t cached and you’re offline. Cache it from the download tool while connected, then it’ll resolve offline.</p>
-    {% endif %}
-  {% elif results and source != 'local' %}
-  <p class="muted">No local matches — fetched online and saved for next time.</p>
-  {% endif %}
-  {% if results %}
-  <div class="card-grid" id="search-grid">
-    {% for c in results %}
-    {% set p = prices.get(c.id) %}
-    <a class="card-tile js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
-      <span class="card-frame">
-        <img loading="lazy" width="336" height="468"
-             src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
-      </span>
-      <span class="caption">{{ c.name }}<br>
-        <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}
-          {% if not game %} · {{ games.get(c.game or 'mtg', c.game or 'mtg') }}{% endif %}
-          {% if p and p.usd is not none %} · ${{ '%.2f'|format(p.usd) }}{% endif %}
-        </span></span>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="muted">
-    {% if not game %}No matches in the local database — pick a specific game to search online.
-    {% elif offline %}No matches in the local database (offline mode — online search is disabled).
-    {% else %}No matches locally or online — check the spelling.{% endif %}
-  </p>
-  {% endif %}
-</div>
-{% endif %}
-
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  const game = document.getElementById('search-game');
-  const q = document.getElementById('search-q');
+  const game = document.getElementById('gallery-game');
+  if (!game) return;
   const labels = {
     '': 'All games',
     {% for g, label in games.items() %}'{{ g }}': {{ label|tojson }},{% endfor %}
   };
-  const GAME_LS_KEY = 'proxyshop.search.game';
-  const params = new URLSearchParams(location.search);
-  if (!params.has('game')) {
-    try {
-      const saved = localStorage.getItem(GAME_LS_KEY);
-      if (saved !== null && saved in labels) game.value = saved;
-    } catch (e) { /* private mode */ }
-  }
-  try {
-    wireCardTypeahead(q, {
-      getGame: () => game.value,
-      onSelect: (card) => { location.href = `/card/${encodeURIComponent(card.id)}`; },
-    });
-  } catch (e) { /* typeahead optional */ }
-  q.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Enter') return;
-    const drop = q.closest('.typeahead')?.querySelector('.typeahead-drop');
-    if (drop && !drop.hidden) return;
-    ev.preventDefault();
-    document.getElementById('search-form-game').value = game.value;
-    document.getElementById('search-form-q').value = q.value.trim();
-    document.getElementById('search-form').submit();
-  });
-
+  const GAME_LS_KEY = 'proxyshop.cache.game';
   const panel = document.getElementById('cache-panel');
   if (!panel) return;
   const catalog = (panel.dataset.catalogGames || '').split(',').filter(Boolean);
@@ -264,8 +163,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const filtPkm = document.getElementById('cache-filters-pokemon');
   const filtSmall = document.getElementById('cache-filters-small');
   const jobsEl = document.getElementById('cache-jobs');
-  const logEl = document.getElementById('cache-log');
-  const logWrap = document.getElementById('cache-log-wrap');
   let pollTimer = null;
   let optionsCache = {};
   let mtgSetPicker = null;
@@ -435,21 +332,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btnFresh.disabled = offline;
   }
 
-  async function refreshLog() {
-    const g = game.value;
-    if (!catalog.includes(g) || !logEl) return;
-    try {
-      const res = await fetch(`/api/cache-game/${encodeURIComponent(g)}/log?limit=200`);
-      if (!res.ok) return;
-      const body = await res.json();
-      const text = (body.lines || []).join('\n');
-      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
-      logEl.textContent = text || '—';
-      if (atBottom || (logWrap && logWrap.open)) {
-        logEl.scrollTop = logEl.scrollHeight;
-      }
-    } catch (e) { /* log is best-effort */ }
-  }
 
   async function refreshJobs() {
     if (!jobsEl || typeof renderJobChips !== 'function') return;
@@ -479,7 +361,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (g !== game.value) return;
       statusEl.textContent = formatStatus(body);
       applyButtons(body);
-      refreshLog();
       refreshJobs();
       if (body.running) {
         if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
@@ -513,7 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
       li.className = 'cached-tag';
       const a = document.createElement('a');
       a.className = 'cached-tag-name';
-      a.href = '/search?game=mtg&q=' + encodeURIComponent(t.tag);
+      a.href = '/gallery?game=mtg&q=' + encodeURIComponent(t.tag);
       a.textContent = t.tag;
       const meta = document.createElement('span');
       meta.className = 'muted cached-tag-meta';
@@ -611,8 +492,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     statusEl.textContent = formatStatus(body);
     applyButtons(body);
-    if (logWrap) logWrap.open = true;
-    refreshLog();
     refreshJobs();
     if (body.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
     setTimeout(refreshStatus, 800);
@@ -654,7 +533,6 @@ document.addEventListener('DOMContentLoaded', () => {
     postCache('start', true);
   });
   btnStop.addEventListener('click', () => postCache('stop', false));
-  game.addEventListener('change', syncPanel);
   const inlineTagBtn = document.getElementById('cache-this-tag');
   if (inlineTagBtn) {
     inlineTagBtn.addEventListener('click', () => startTagDownload(inlineTagBtn.dataset.tag));
@@ -662,4 +540,3 @@ document.addEventListener('DOMContentLoaded', () => {
   syncPanel();
 });
 </script>
-{% endblock %}

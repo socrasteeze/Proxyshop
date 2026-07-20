@@ -1288,6 +1288,19 @@ body.modal-open { overflow: hidden; }
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--text);
 }
+.gallery-note { margin: 0 0 .8rem; }
+.tag-note {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  padding: .6rem .8rem;
+  margin: 0 0 .9rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: .9rem;
+}
 .logs-page {
   display: flex;
   flex-direction: column;

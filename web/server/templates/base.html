@@ -13,9 +13,8 @@
     {% set path = request.url.path if request else '' %}
     <nav aria-label="Main">
       <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>Editor</a>
-      <a href="/gallery" {% if path.startswith('/gallery') or path.startswith('/card/') %}aria-current="page"{% endif %}>Card library</a>
+      <a href="/gallery" {% if path.startswith('/gallery') or path.startswith('/card/') or path.startswith('/search') %}aria-current="page"{% endif %}>Card library <span id="nav-cache-badge" class="nav-badge" hidden></span></a>
       <a href="/decks" {% if path.startswith('/decks') %}aria-current="page"{% endif %}>Decks</a>
-      <a href="/search" {% if path.startswith('/search') %}aria-current="page"{% endif %}>Search cards <span id="nav-cache-badge" class="nav-badge" hidden></span></a>
       <a href="/logs" {% if path.startswith('/logs') %}aria-current="page"{% endif %}>Logs</a>
     </nav>
   </header>

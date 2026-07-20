@@ -140,6 +140,14 @@
   </div>
 
   {% set is_mtg = game == 'mtg' %}
+  {% if tag_uncached %}
+  <div class="gallery-note tag-note">
+    <span>This tag isn’t in your offline cache{% if offline %} and you’re offline — cache it while connected to browse it here.{% else %} yet.{% endif %}</span>
+    {% if not offline %}<button type="button" class="btn-ghost tag-inline-btn" id="cache-this-tag" data-tag="{{ q }}">Cache this tag for offline</button>{% endif %}
+  </div>
+  {% elif search_source not in ('local', '') %}
+  <p class="muted gallery-note">No local matches — fetched from {{ 'Scryfall' if is_mtg else games.get(game, game) }} and saved to the cache.</p>
+  {% endif %}
   {% if cards %}
   {% if view == 'checklist' %}
   {# Dense spreadsheet-style table (Scryfall "Checklist"). #}
@@ -289,12 +297,13 @@
     {% endfor %}
   </div>
   {% endif %}
-  {% else %}
+  {% elif not tag_uncached %}
   <p class="muted">
     No cards match your filters.
-    {% if total_all == 0 %}
-    Use <a href="/search">Search cards</a> to find cards online, or download a
-    catalog to the local cache first.
+    {% if q and game and not offline %}
+    Nothing online either — check the spelling.
+    {% elif total_all == 0 %}
+    Download a catalog to the local cache below to get started.
     {% endif %}
   </p>
   {% endif %}
@@ -324,6 +333,9 @@
   </nav>
   {% endif %}
 </div>
+
+{# Download & cache tool (per-game, driven by the Library's game selector) #}
+{% include "_cache_tool.html" %}
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
