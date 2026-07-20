@@ -414,7 +414,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 }
 .full-row {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 260px);
   gap: 1.25rem;
   padding: 1rem;
   border: 1px solid var(--border);
@@ -454,6 +454,47 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 }
 .legal-yes { background: color-mix(in srgb, #3fb950 22%, transparent); color: #7ee787; }
 .legal-no { background: rgba(255, 255, 255, .05); color: var(--muted); }
+
+/* Prints panel (Scryfall-style "Prints" list beside the Full card). */
+.full-prints {
+  align-self: start;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: .7rem .8rem;
+  background: rgba(255, 255, 255, .02);
+  font-size: .82rem;
+}
+.fp-head { display: flex; flex-direction: column; gap: .1rem; margin-bottom: .5rem; }
+.fp-set { font-weight: 700; }
+.fp-label {
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-size: .7rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .25rem;
+  margin-bottom: .25rem;
+}
+.fp-table { width: 100%; border-collapse: collapse; }
+.fp-table td { padding: .2rem .3rem; white-space: nowrap; }
+.fp-table .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.fp-name a { color: var(--text); text-decoration: none; }
+.fp-name a:hover { color: var(--accent); }
+.fp-table .is-current { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.fp-table .is-current .fp-name a { font-weight: 700; color: var(--accent); }
+.fp-all {
+  display: inline-block;
+  margin-top: .45rem;
+  font-size: .8rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.fp-all:hover { text-decoration: underline; }
+
+@media (max-width: 960px) {
+  .full-row { grid-template-columns: 240px minmax(0, 1fr); }
+  .full-prints { grid-column: 1 / -1; }
+}
 
 /* ---- Checklist view (dense table) ---- */
 .checklist-wrap { margin-top: .5rem; overflow-x: auto; }

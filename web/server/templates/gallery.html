@@ -223,6 +223,30 @@
         </div>
         {% endif %}
       </div>
+      {% if c.prints %}
+      <aside class="full-prints">
+        <div class="fp-head">
+          <span class="fp-set">{{ c.set_name or (c.set or '')|upper }}</span>
+          <span class="muted">#{{ c.collector_number }}{% if c.detail.rarity %} · {{ c.detail.rarity|capitalize }}{% endif %} · {{ (c.lang or '')|upper }}</span>
+        </div>
+        <div class="fp-label">Prints</div>
+        <table class="fp-table">
+          {% for p in c.prints %}
+          <tr class="{% if p.current %}is-current{% endif %}">
+            <td class="fp-name"><a href="/card/{{ p.id }}">{{ p.set_name or (p.set or '')|upper }} #{{ p.collector_number }}</a></td>
+            {% if is_mtg %}
+            <td class="num">{% if p.usd %}${{ p.usd }}{% endif %}</td>
+            <td class="num">{% if p.eur %}€{{ p.eur }}{% endif %}</td>
+            <td class="num">{{ p.tix or '' }}</td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </table>
+        {% if c.print_total and c.print_total > c.prints|length %}
+        <a class="fp-all" href="/card/{{ c.id }}">View all {{ c.print_total }} prints →</a>
+        {% endif %}
+      </aside>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

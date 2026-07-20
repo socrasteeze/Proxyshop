@@ -515,10 +515,20 @@ def page_gallery(
         1 for _ in carddb.distinct_sets(game))
 
     # For the detail-bearing views, fold the stored card JSON into the compact
-    # display fields the List / Full / Checklist templates render.
+    # display fields the List / Full / Checklist templates render. The Full view
+    # additionally lists the card's other printings (Scryfall-style "Prints").
     if want_detail:
         for c in cards:
-            c['detail'] = _gallery_detail_fields(c.pop('data', {}), c['game'])
+            data = c.pop('data', {})
+            c['detail'] = _gallery_detail_fields(data, c['game'])
+            if view == 'full':
+                group = carddb.list_art_group(c['id'], limit=13)
+                for p in group:
+                    p['current'] = p['id'] == c['id']
+                    if p['current']:
+                        c['set_name'] = p.get('set_name') or (c.get('set') or '').upper()
+                c['prints'] = group
+                c['print_total'] = c.get('art_count') or len(group)
 
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,

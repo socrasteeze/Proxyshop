@@ -606,7 +606,11 @@ class CardDB:
         rows = con.execute(
             f"""
             SELECT id, name, set_code, collector_number, lang, released_at, game,
-                   json_extract(json, '$.set_name') AS set_name
+                   json_extract(json, '$.set_name') AS set_name,
+                   json_extract(json, '$.rarity') AS rarity,
+                   json_extract(json, '$.prices.usd') AS usd,
+                   json_extract(json, '$.prices.eur') AS eur,
+                   json_extract(json, '$.prices.tix') AS tix
             FROM cards
             WHERE ({expr}) = (SELECT ({expr}) FROM cards WHERE id = ?)
             ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
@@ -622,6 +626,10 @@ class CardDB:
                 'lang': r['lang'],
                 'released_at': r['released_at'],
                 'game': r['game'] or 'mtg',
+                'rarity': r['rarity'],
+                'usd': r['usd'],
+                'eur': r['eur'],
+                'tix': r['tix'],
             }
             for r in rows]
 

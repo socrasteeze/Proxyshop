@@ -603,6 +603,22 @@ class TestGallerySortViews:
         assert 'card-detail-list' in r.text
         assert 'Artifact' in r.text
 
+    def test_full_view_lists_other_prints(self, appmod, client):
+        # Two printings of the same card (shared oracle_id → one art group).
+        p1 = make_card('sol-1', 'Sol Ring', 'c21', '263')
+        p2 = make_card('sol-2', 'Sol Ring', 'lea', '270')
+        p1['prices'] = {'usd': '1.50'}
+        p2['prices'] = {'usd': '3500.00'}
+        for c in (p1, p2):
+            appmod.carddb.store_card(c)
+        r = client.get('/gallery',
+                       params={'game': 'mtg', 'view': 'full', 'arts': 'combine'})
+        assert r.status_code == 200
+        assert 'full-prints' in r.text
+        # The prints panel lists both set printings of the grouped card.
+        assert 'C21 #263' in r.text
+        assert 'LEA #270' in r.text
+
 
 class TestMultiGameSearch:
 
