@@ -26,6 +26,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   const page = document.getElementById('logs-page');
   if (!page) return;
+  // Pin the logs view to the viewport so only the log box scrolls (see CSS).
+  document.body.classList.add('logs-body');
   const catalog = (page.dataset.catalogGames || '').split(',').filter(Boolean);
   const statusEl = document.getElementById('logs-status');
   const detailEl = document.getElementById('logs-status-detail');

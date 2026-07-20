@@ -1301,18 +1301,40 @@ body.modal-open { overflow: hidden; }
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   font-size: .9rem;
 }
+/* Collapsible "Download & cache" panel (a <details> styled as a panel). */
+.cache-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.cache-summary::-webkit-details-marker { display: none; }
+.cache-summary h2 { margin: 0; }
+.cache-summary::before {
+  content: '▸';
+  color: var(--muted);
+  transition: transform .15s var(--ease);
+}
+details.cache-panel-details[open] > .cache-summary::before { transform: rotate(90deg); }
+details.cache-panel-details[open] > .cache-summary { margin-bottom: .8rem; }
+
+/* Logs page: fill the viewport so ONLY the log box scrolls, never the page.
+   Body becomes a flex column (header natural height, main fills the rest); the
+   log flex-fills and scrolls internally — no magic offsets to drift. */
+body.logs-body { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+body.logs-body main { flex: 1 1 auto; min-height: 0; padding-bottom: 1rem; display: flex; flex-direction: column; }
 .logs-page {
   display: flex;
   flex-direction: column;
   gap: .85rem;
-  min-height: calc(100vh - 6rem);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .logs-page .cache-log {
   flex: 1 1 auto;
-  min-height: 18rem;
-  /* Cap to the viewport so the log scrolls inside its own box instead of
-     growing the whole page as more lines stream in. */
-  max-height: calc(100vh - 16rem);
+  min-height: 6rem;
+  max-height: none;
   overflow: auto;
 }
 .game-pills {

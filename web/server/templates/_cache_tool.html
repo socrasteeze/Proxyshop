@@ -1,15 +1,18 @@
 {# Download & cache tool — shared by Card Library. Drives its per-game
    filters off the #gallery-game selector; live log lives on the Logs tab. #}
-<div class="panel" id="cache-panel" hidden
+<details class="panel cache-panel-details" id="cache-panel" open
      data-catalog-games="{{ catalog_games|join(',') }}"
      data-offline="{{ '1' if offline else '0' }}">
-  <div class="panel-header">
-    <h2>Download &amp; cache</h2>
-    <div class="btn-row">
-      <button type="button" id="cache-start">Start download</button>
-      <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume download</button>
-      <button type="button" class="btn-danger" id="cache-stop" hidden>Stop download</button>
-    </div>
+  <summary class="cache-summary"><h2>Download &amp; cache</h2></summary>
+  <p class="muted" id="cache-pick-game" hidden>
+    Pick a game in the <strong>Game</strong> filter above (MTG, Pokémon, …) to
+    download and cache its cards here.
+  </p>
+  <div id="cache-controls" hidden>
+  <div class="btn-row" id="cache-btn-row">
+    <button type="button" id="cache-start">Start download</button>
+    <button type="button" class="btn-ghost" id="cache-resume" hidden>Resume download</button>
+    <button type="button" class="btn-danger" id="cache-stop" hidden>Stop download</button>
   </div>
   <p class="muted">
     Download matching <span data-cache-label></span> cards and high-quality images to this server.
@@ -138,7 +141,8 @@
     </div>
     <p class="muted" style="margin-top:.5rem">Discards the current checkpoint and restarts with the filters above.</p>
   </details>
-</div>
+  </div>
+</details>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
@@ -153,6 +157,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!panel) return;
   const catalog = (panel.dataset.catalogGames || '').split(',').filter(Boolean);
   const offline = panel.dataset.offline === '1';
+  // Remember whether the panel is expanded so browsing stays uncluttered once
+  // you collapse it, while still being one click away.
+  const OPEN_KEY = 'proxyshop.cache.open';
+  try {
+    const saved = localStorage.getItem(OPEN_KEY);
+    if (saved !== null) panel.open = saved === '1';
+  } catch (e) { /* private mode */ }
+  panel.addEventListener('toggle', () => {
+    try { localStorage.setItem(OPEN_KEY, panel.open ? '1' : '0'); } catch (e) { /* private mode */ }
+  });
   const statusEl = document.getElementById('cache-status');
   const btnStart = document.getElementById('cache-start');
   const btnResume = document.getElementById('cache-resume');
@@ -512,8 +526,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Stop polling the previous game; refreshStatus restarts it if the newly
     // selected game is running.
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    // The panel is always visible; only its body toggles. When the Library is
+    // on a non-catalog game ('All games'), show a prompt instead of the (empty)
+    // per-game controls so the tool is always discoverable.
     const show = catalog.includes(g);
-    panel.hidden = !show;
+    document.getElementById('cache-controls').hidden = !show;
+    document.getElementById('cache-pick-game').hidden = show;
     if (!show) return;
     labelEl.textContent = labels[g] || g;
     syncFilters(g);

@@ -99,6 +99,10 @@
   </script>
 </div>
 
+{# Download & cache tool (per-game, driven by the Library's game selector) —
+   collapsible so browsing stays primary, but always visible/discoverable. #}
+{% include "_cache_tool.html" %}
+
 <div class="panel">
   <div class="gallery-meta">
     <span class="muted">
@@ -333,9 +337,6 @@
   </nav>
   {% endif %}
 </div>
-
-{# Download & cache tool (per-game, driven by the Library's game selector) #}
-{% include "_cache_tool.html" %}
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
