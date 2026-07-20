@@ -782,6 +782,20 @@ class TestTagCache:
         assert body['source'] == 'tag-cache'
         assert {c['name'] for c in body['cards']} == {'Shivan Dragon', 'Dragon Whelp'}
 
+    def test_card_library_filters_by_cached_tag(self, appmod, client):
+        # Card Library (/gallery) is cached-only: a cached tag filters the grid;
+        # an uncached tag shows nothing (never a live call on keystroke).
+        for cid, name in (('d-1', 'Shivan Dragon'), ('d-2', 'Dragon Whelp'),
+                          ('e-1', 'Llanowar Elves')):
+            appmod.carddb.store_card(make_card(cid, name, 'tst', cid[-1]))
+        appmod.carddb.record_tag('art:dragon', ['d-1', 'd-2'])
+        r = client.get('/gallery', params={'game': 'mtg', 'q': 'art:dragon'})
+        assert 'Shivan Dragon' in r.text and 'Dragon Whelp' in r.text
+        assert 'Llanowar Elves' not in r.text
+        # Uncached tag → empty grid, no literal-text matches.
+        r2 = client.get('/gallery', params={'game': 'mtg', 'q': 'art:unknown'})
+        assert 'Shivan Dragon' not in r2.text
+
     def test_uncached_tag_offline_is_empty(self, appmod, client):
         # Offline + not cached → no local field-scan for the literal 'art:' text.
         body = client.get('/api/cards/search',

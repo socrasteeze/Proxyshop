@@ -792,13 +792,23 @@ class CardDB:
             where.append('game=?')
             params.append(game)
         if q.strip():
-            # Same field/keyword matching as the Search-cards box — game-scoped
-            # (t:, o:, supertype:, 'supporter', …) or cross-game via the
-            # universal field set when no game is selected.
-            parsed = cardquery.parse_query(q, game)
-            where_sql, where_params = cardquery.build_where(parsed, game)
-            where.append(f'({where_sql})')
-            params.extend(where_params)
+            if game == 'mtg' and cardquery.has_tag_op(q):
+                # Scryfall Tagger query (art:/otag:/function:/…): these tags
+                # aren't in the card data, so resolve from the offline tag cache
+                # only — never a live call, since the library searches on every
+                # keystroke. An uncached tag yields an empty membership → no rows
+                # (rather than a bogus literal 'art:' text match).
+                where.append(
+                    'id IN (SELECT card_id FROM card_tags WHERE tag=?)')
+                params.append(cardquery.normalize_tag(q))
+            else:
+                # Same field/keyword matching as the Search-cards box —
+                # game-scoped (t:, o:, supertype:, 'supporter', …) or cross-game
+                # via the universal field set when no game is selected.
+                parsed = cardquery.parse_query(q, game)
+                where_sql, where_params = cardquery.build_where(parsed, game)
+                where.append(f'({where_sql})')
+                params.extend(where_params)
         if set_code.strip():
             where.append('set_code=?')
             params.append(set_code.strip().lower())
