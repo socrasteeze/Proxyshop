@@ -475,9 +475,17 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   padding-bottom: .25rem;
   margin-bottom: .25rem;
 }
+.full-prints { min-width: 0; overflow: hidden; }
 .fp-table { width: 100%; border-collapse: collapse; }
-.fp-table td { padding: .2rem .3rem; white-space: nowrap; }
-.fp-table .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.fp-table td { padding: .2rem .3rem; vertical-align: top; }
+.fp-table .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* Long (e.g. Japanese) set names wrap inside the fixed-width panel. */
+.fp-name { overflow-wrap: anywhere; word-break: break-word; }
 .fp-name a { color: var(--text); text-decoration: none; }
 .fp-name a:hover { color: var(--accent); }
 .fp-table .is-current { background: color-mix(in srgb, var(--accent) 12%, transparent); }
