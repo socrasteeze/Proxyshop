@@ -653,24 +653,27 @@ function wireCardPopover(root = document) {
         <p class="btn-row" style="margin-top:1rem">${actions.join('')}</p>
         ${printsBlock}
       </div>`;
-    // Clicking a print swaps the modal to that printing.
+    // Clicking a print swaps the modal to that printing — in place, without a
+    // loading flash (detail is a fast local lookup). Mark the tapped tile
+    // active immediately so it feels responsive.
     body.querySelectorAll('.print-tile').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.printId;
-        if (id && id !== data.id) open(id, btn);
+        if (!id || id === data.id) return;
+        body.querySelectorAll('.print-tile').forEach((t) => t.classList.remove('is-current'));
+        btn.classList.add('is-current');
+        load(id, { silent: true });
       });
     });
   }
 
-  async function open(cardId, trigger) {
-    lastFocus = trigger || document.activeElement;
-    openedAt = Date.now();
-    modal.hidden = false;
-    document.body.classList.add('modal-open');
-    title.textContent = 'Loading…';
-    body.innerHTML = '<p class="muted">Loading…</p>';
-    if (closeBtn) {
-      try { closeBtn.focus(); } catch (e) { /* ignore */ }
+  // Fetch a card's detail and render it. When `silent`, keep the current
+  // content visible until the new data arrives (used for print-to-print swaps
+  // so the modal doesn't flash "Loading…").
+  async function load(cardId, { silent = false } = {}) {
+    if (!silent) {
+      title.textContent = 'Loading…';
+      body.innerHTML = '<p class="muted">Loading…</p>';
     }
     if (abort) abort.abort();
     abort = new AbortController();
@@ -685,6 +688,17 @@ function wireCardPopover(root = document) {
       body.innerHTML = `<p class="muted">Could not load card.`
         + ` <a href="/card/${encodeURIComponent(cardId)}">Open full page</a>.</p>`;
     }
+  }
+
+  async function open(cardId, trigger) {
+    lastFocus = trigger || document.activeElement;
+    openedAt = Date.now();
+    modal.hidden = false;
+    document.body.classList.add('modal-open');
+    if (closeBtn) {
+      try { closeBtn.focus(); } catch (e) { /* ignore */ }
+    }
+    return load(cardId, { silent: false });
   }
 
   const scope = root || document;
