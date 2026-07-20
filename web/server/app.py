@@ -282,6 +282,31 @@ def page_decks(request: Request):
 PER_PAGE_OPTIONS = (24, 48, 60, 96, 120)
 
 
+def _compose_gallery_query(q: str, field_filters: dict) -> str:
+    """Fold structured dropdown selections into a field-syntax query string.
+
+    Values with spaces are quoted so the cardquery tokenizer keeps them whole
+    (e.g. rarity="Rare Holo"). The result is parsed by list_gallery exactly like
+    a typed query, so the dropdowns and the text box share one code path.
+    """
+    parts = [q.strip()] if q and q.strip() else []
+    for field, value in field_filters.items():
+        value = (value or '').strip()
+        if not value:
+            continue
+        parts.append(f'{field}:"{value}"' if ' ' in value else f'{field}:{value}')
+    return ' '.join(parts)
+
+
+# Gallery dropdown fields → cardquery field name
+GALLERY_FILTER_FIELDS = {
+    'ftype': 'type',
+    'fsupertype': 'supertype',
+    'fsubtype': 'subtype',
+    'frarity': 'rarity',
+}
+
+
 @app.get('/gallery', response_class=HTMLResponse)
 def page_gallery(
     request: Request,
@@ -293,6 +318,10 @@ def page_gallery(
     per_page: int = 60,
     view: str = 'grid',
     arts: str = 'unique',
+    ftype: str = '',
+    fsupertype: str = '',
+    fsubtype: str = '',
+    frarity: str = '',
 ):
     """Browse all locally cached cards as a gallery."""
     game = (game or '').strip().lower()
@@ -310,9 +339,16 @@ def page_gallery(
     if per_page not in PER_PAGE_OPTIONS:
         per_page = min(PER_PAGE_OPTIONS, key=lambda n: abs(n - per_page))
 
+    gallery_filters = {
+        'ftype': ftype, 'fsupertype': fsupertype,
+        'fsubtype': fsubtype, 'frarity': frarity,
+    }
+    effective_q = _compose_gallery_query(
+        q, {GALLERY_FILTER_FIELDS[k]: v for k, v in gallery_filters.items()})
+
     cards, total = carddb.list_gallery(
         game=game or None,
-        q=q,
+        q=effective_q,
         set_code=set,
         offset=(page - 1) * per_page,
         limit=per_page,
@@ -327,7 +363,7 @@ def page_gallery(
         page = pages
         cards, total = carddb.list_gallery(
             game=game or None,
-            q=q,
+            q=effective_q,
             set_code=set,
             offset=(page - 1) * per_page,
             limit=per_page,
@@ -353,6 +389,12 @@ def page_gallery(
             params['q'] = qq
         if ss:
             params['set'] = ss
+        # Carry structured dropdown filters across pagination/sort links unless
+        # explicitly overridden (e.g. Clear filters passes them empty).
+        for key in GALLERY_FILTER_FIELDS:
+            val = overrides.get(key, gallery_filters.get(key))
+            if val:
+                params[key] = val
         return '/gallery?' + urlencode(params)
 
     # Compact page-number window: 1 … (page±2) … last
@@ -369,6 +411,7 @@ def page_gallery(
         'game': game,
         'q': q,
         'set_code': set,
+        'filters': gallery_filters,
         'sort': sort,
         'page': page,
         'pages': pages,

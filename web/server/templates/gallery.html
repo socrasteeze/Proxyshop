@@ -34,13 +34,80 @@
         <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Recently added</option>
       </select>
     </label>
+    {# Game-aware dropdowns — same filters as the download panel, populated per
+       game from the options API. Hidden until a specific game is selected. #}
+    <label class="gallery-filter" data-filter="type" hidden>Type
+      <select name="ftype" id="gallery-ftype" data-selected="{{ filters.ftype }}">
+        <option value="">Any</option>
+      </select>
+    </label>
+    <label class="gallery-filter" data-filter="supertype" hidden>Supertype
+      <select name="fsupertype" id="gallery-fsupertype" data-selected="{{ filters.fsupertype }}">
+        <option value="">Any</option>
+      </select>
+    </label>
+    <label class="gallery-filter" data-filter="subtype" hidden>Subtype
+      <select name="fsubtype" id="gallery-fsubtype" data-selected="{{ filters.fsubtype }}">
+        <option value="">Any</option>
+      </select>
+    </label>
+    <label class="gallery-filter" data-filter="rarity" hidden>Rarity
+      <select name="frarity" id="gallery-frarity" data-selected="{{ filters.frarity }}">
+        <option value="">Any</option>
+      </select>
+    </label>
     <div class="filter-actions">
       <button type="submit">Apply filters</button>
-      {% if q or set_code or game %}
-      <a class="btn btn-ghost" href="{{ page_url(1, game='', q='', set='') }}">Clear filters</a>
+      {% if q or set_code or game or filters.ftype or filters.fsupertype or filters.fsubtype or filters.frarity %}
+      <a class="btn btn-ghost" href="/gallery">Clear filters</a>
       {% endif %}
     </div>
   </form>
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const gameSel = document.getElementById('gallery-game');
+    const filterEls = Array.from(document.querySelectorAll('.gallery-filter'));
+    // field name in the options payload for each dropdown
+    const optionKey = { type: 'types', supertype: 'supertypes',
+                        subtype: 'subtypes', rarity: 'rarities' };
+
+    function fill(sel, values) {
+      const chosen = sel.dataset.selected || '';
+      sel.innerHTML = '<option value="">Any</option>';
+      (values || []).forEach((v) => {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = v;
+        if (v === chosen) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+
+    async function loadFilters(game) {
+      // Structured dropdowns only apply to a specific catalog game.
+      if (!game) { filterEls.forEach((el) => { el.hidden = true; }); return; }
+      let data = {};
+      try {
+        const res = await fetch(`/api/cache-game/${encodeURIComponent(game)}/options`);
+        if (res.ok) data = await res.json();
+      } catch (e) { /* offline: leave dropdowns empty/hidden */ }
+      filterEls.forEach((el) => {
+        const kind = el.dataset.filter;
+        const values = data[optionKey[kind]] || [];
+        const sel = el.querySelector('select');
+        // Show a dropdown only when this game actually offers that facet.
+        if (values.length) { fill(sel, values); el.hidden = false; }
+        else { el.hidden = true; sel.innerHTML = '<option value="">Any</option>'; }
+      });
+    }
+
+    loadFilters(gameSel.value);
+    gameSel.addEventListener('change', () => {
+      // Reset stale selections when switching games, then reload facets.
+      filterEls.forEach((el) => { el.querySelector('select').dataset.selected = ''; });
+      loadFilters(gameSel.value);
+    });
+  });
+  </script>
   <div class="gallery-chips">
     <a class="pill {% if not game %}pill-active{% endif %}"
        href="{{ page_url(1, game='') }}">

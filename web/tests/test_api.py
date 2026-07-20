@@ -501,6 +501,40 @@ class TestSheets:
         assert res.status_code == 422
 
 
+class TestGalleryFilters:
+
+    def _seed(self, appmod):
+        boss = make_card('pkm-1', 'Boss Orders', 'sv1', '189')
+        boss['game'] = 'pokemon'
+        boss['provider_data'] = {'supertype': 'Trainer', 'subtypes': ['Supporter'],
+                                 'types': [], 'rarity': 'Rare Holo'}
+        pika = make_card('pkm-2', 'Pikachu', 'sv1', '63')
+        pika['game'] = 'pokemon'
+        pika['provider_data'] = {'supertype': 'Pokémon', 'subtypes': ['Basic'],
+                                 'types': ['Lightning'], 'rarity': 'Common'}
+        for c in (boss, pika):
+            appmod.carddb.store_card(c, game='pokemon')
+
+    def test_compose_query_quotes_spaces(self, appmod):
+        assert appmod._compose_gallery_query(
+            'pika', {'supertype': 'Trainer', 'rarity': 'Rare Holo', 'type': ''}
+        ) == 'pika supertype:Trainer rarity:"Rare Holo"'
+
+    def test_gallery_supertype_dropdown(self, appmod, client):
+        self._seed(appmod)
+        r = client.get('/gallery', params={'game': 'pokemon', 'fsupertype': 'Trainer'})
+        assert r.status_code == 200
+        assert 'Boss Orders' in r.text
+        assert 'Pikachu' not in r.text
+
+    def test_gallery_rarity_with_space(self, appmod, client):
+        self._seed(appmod)
+        r = client.get('/gallery', params={'game': 'pokemon', 'frarity': 'Rare Holo'})
+        assert r.status_code == 200
+        assert 'Boss Orders' in r.text
+        assert 'Pikachu' not in r.text
+
+
 class TestMultiGameSearch:
 
     def _pokemon_card(self, card_id='pkm-xy7-54', name='Gardevoir'):

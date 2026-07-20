@@ -448,7 +448,10 @@ function formatCacheStatus(body) {
   }
   const stored = body.stored ?? 0;
   const total = body.total_hint;
-  const prog = total ? `${stored} of ${total}` : `${stored}`;
+  // Only show "X of Y" when Y is a plausible card total (a superset of what's
+  // stored). Some providers page by product/series (Union Arena), so total_hint
+  // is a page/series count, not a card count — showing "11773 of 157" is wrong.
+  const prog = (total && total >= stored) ? `${stored} of ${total}` : `${stored}`;
   const ok = body.images_ok ?? 0;
   const skip = body.images_skip ?? 0;
   const fail = body.images_fail ?? 0;
