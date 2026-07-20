@@ -56,6 +56,13 @@ if [ -z "${UPDATER_REEXEC:-}" ]; then
 fi
 # ----------------------------------------------------------------------------
 
+# Move to a guaranteed-valid directory. If this script is launched from a dir
+# that was deleted/replaced (a stale shell), rsync aborts with
+# "getcwd(): No such file or directory" before it can copy anything — which
+# silently prevents the container from ever rebuilding. All paths below are
+# absolute, so the working directory doesn't otherwise matter.
+cd "$HOME" 2>/dev/null || cd / || true
+
 echo "==> Deploying $APP_NAME from $REPO@$BRANCH"
 
 # --- fetch ------------------------------------------------------------------
