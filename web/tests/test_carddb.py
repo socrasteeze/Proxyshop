@@ -169,6 +169,27 @@ class TestStoreAndLookup:
         assert total == 1
         assert cards[0]['art_count'] == 3
 
+    def test_riftbound_treatments_group_by_set_number_with_prints(self, carddb):
+        # Same set+number, different source ids (treatments) → one group + prints
+        for i in range(3):
+            c = make_card(f'rb-{i}', 'Aphelios, Exalted', 'sfd', '224')
+            c['game'] = 'riftbound'
+            c['oracle_id'] = None
+            c['provider_data'] = {'riftbound_id': f'sfd-224-{i}'}
+            carddb.store_card(c, game='riftbound')
+        other = make_card('rb-x', 'Aphelios, Exalted', 'sfd', '49')
+        other['game'] = 'riftbound'
+        other['oracle_id'] = None
+        carddb.store_card(other, game='riftbound')
+        cards, total = carddb.list_gallery(game='riftbound', group_arts=True)
+        assert total == 2  # #224 (×3) and #49
+        assert sorted(c['art_count'] for c in cards) == [1, 3]
+        group = carddb.list_art_group('rb-0')
+        assert {p['id'] for p in group} == {'rb-0', 'rb-1', 'rb-2'}
+
+    def test_list_art_group_unknown_returns_empty(self, carddb):
+        assert carddb.list_art_group('nope') == []
+
     def test_list_gallery_combine_union_arena_by_card_no(self, carddb):
         def ua(cid, name, lang):
             c = make_card(cid, name, 'UE02BT', 'HTR-1-005', lang=lang)

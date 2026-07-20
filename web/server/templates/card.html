@@ -41,6 +41,21 @@
     {% if game in ('mtg', 'pokemon', 'riftbound') %}
     <p class="muted">The editor lets you swap art, edit text, preview the card, or render it in Photoshop.</p>
     {% endif %}
+
+    {% if prints and prints|length > 1 %}
+    <div class="prints-block">
+      <h3 class="prints-title">Prints · {{ prints|length }}</h3>
+      <div class="prints-grid">
+        {% for p in prints %}
+        <a class="print-tile{% if p.current %} is-current{% endif %}" href="{{ p.page_url }}"
+           title="{{ p.set_name or p.set }}">
+          <img loading="lazy" src="{{ p.thumb }}" alt="">
+          <span class="muted">{{ (p.set or '')|upper }}{% if p.collector_number %} #{{ p.collector_number }}{% endif %}{% if p.lang and p.lang != 'en' %} {{ p.lang|upper }}{% endif %}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

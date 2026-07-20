@@ -554,6 +554,37 @@ class CardDB:
         },
     }
 
+    def list_art_group(self, card_id: str, limit: int = 200) -> list[dict]:
+        """All printings/arts that group with the given card (its 'Prints').
+
+        Uses the same key as the gallery's combine-arts view, so this returns
+        exactly the members that collapse into one entry there. Newest first.
+        Returns [] if the card isn't found.
+        """
+        con = self._conn()
+        expr = self._ART_GROUP_EXPR
+        rows = con.execute(
+            f"""
+            SELECT id, name, set_code, collector_number, lang, released_at, game,
+                   json_extract(json, '$.set_name') AS set_name
+            FROM cards
+            WHERE ({expr}) = (SELECT ({expr}) FROM cards WHERE id = ?)
+            ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
+            LIMIT ?
+            """, (card_id, limit)).fetchall()
+        return [
+            {
+                'id': r['id'],
+                'name': r['name'],
+                'set': r['set_code'],
+                'set_name': r['set_name'],
+                'collector_number': r['collector_number'],
+                'lang': r['lang'],
+                'released_at': r['released_at'],
+                'game': r['game'] or 'mtg',
+            }
+            for r in rows]
+
     def distinct_facets(self, game: str, limit: int = 200) -> dict[str, list[str]]:
         """Distinct filter values actually present in the cache for a game.
 
@@ -623,13 +654,18 @@ class CardDB:
     #   Riftbound    → provider_data.riftbound_id (shared by EN/JA/KO variants)
     #   Union Arena  → provider_data.card_no (shared by EN/JP variants)
     #   others       → game + lower(name)
+    #   MTG          → oracle_id
+    #   Riftbound / Union Arena → set + collector number (collapses every
+    #     treatment/foil/lang printing of one card; the source assigns each a
+    #     distinct id, so id-based grouping would leave them all separate)
+    #   others       → game + lower(name)
     _ART_GROUP_EXPR = (
         "CASE"
         " WHEN game = 'mtg' THEN COALESCE(NULLIF(oracle_id, ''), id)"
-        " WHEN game = 'riftbound' THEN 'riftbound|' || lower(COALESCE("
-        "NULLIF(json_extract(json,'$.provider_data.riftbound_id'), ''), name))"
-        " WHEN game = 'union-arena' THEN 'union-arena|' || lower(COALESCE("
-        "NULLIF(json_extract(json,'$.provider_data.card_no'), ''), name))"
+        " WHEN game IN ('riftbound', 'union-arena')"
+        "   AND set_code IS NOT NULL AND set_code != ''"
+        "   AND collector_number IS NOT NULL AND collector_number != ''"
+        "   THEN game || '|' || lower(set_code) || '|' || lower(collector_number)"
         " ELSE (game || '|' || lower(name)) END"
     )
 

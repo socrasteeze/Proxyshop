@@ -25,13 +25,16 @@
       <input name="q" id="gallery-q" value="{{ q }}" placeholder="Name, or t:creature o:draw supertype:trainer…" autocomplete="off" title="Plain text searches name, type, rules text and subtypes. Field syntax: t: type, o: rules text, r: rarity, set:, artist:, supertype:, subtype:">
     </label>
     <label>Set
-      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="Set code or name…"
-             list="gallery-set-options" autocomplete="off">
-      <datalist id="gallery-set-options">
+      {% if set_options %}
+      <select name="set" id="gallery-set">
+        <option value="">All sets</option>
         {% for s in set_options %}
-        <option value="{{ s.code }}">{{ s.name }}{% if game %} · {{ s.count }}{% endif %}</option>
+        <option value="{{ s.code }}" {% if set_code == s.code %}selected{% endif %}>{{ s.name }} ({{ s.count }})</option>
         {% endfor %}
-      </datalist>
+      </select>
+      {% else %}
+      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="Set code (e.g. MH3)" autocomplete="off">
+      {% endif %}
     </label>
     <label>Sort by
       <select name="sort" id="gallery-sort">

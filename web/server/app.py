@@ -412,7 +412,9 @@ def page_gallery(
     # Facet dropdowns for the selected game, populated from what's actually
     # cached locally (robust, offline, accurate to the library).
     facets = carddb.distinct_facets(game) if game else {}
-    set_options = carddb.distinct_sets(game or None)
+    # Per-game set picklist (a specific game keeps the list focused; 'All games'
+    # would mix hundreds of MTG sets with everything else, so use free text there).
+    set_options = carddb.distinct_sets(game) if game else []
 
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,
@@ -937,6 +939,7 @@ def page_card(request: Request, card_id: str):
         'game_label': payload['game_label'],
         'details': [(d['label'], d['value']) for d in payload['details']],
         'price': payload['price'],
+        'prints': payload['prints'],
         'has_art_crop': payload['has_art_crop'],
     })
 
@@ -996,6 +999,19 @@ def _card_detail_payload(card_id: str) -> dict:
         ] if value
     ]
     price = carddb.get_prices([card_id]).get(card_id)
+    # Other printings/arts of this same card (Scryfall-style "Prints" list).
+    prints = [
+        {
+            'id': p['id'],
+            'set': p['set'],
+            'set_name': p['set_name'],
+            'collector_number': p['collector_number'],
+            'lang': p['lang'],
+            'current': p['id'] == card_id,
+            'thumb': f"/api/cards/{p['id']}/image?kind=large",
+            'page_url': f"/card/{p['id']}",
+        }
+        for p in carddb.list_art_group(card_id)]
     return {
         'id': card_id,
         'name': card.get('name'),
@@ -1004,6 +1020,7 @@ def _card_detail_payload(card_id: str) -> dict:
         'set': card.get('set'),
         'collector_number': card.get('collector_number'),
         'details': details,
+        'prints': prints,
         'price': price,
         'has_art_crop': game == 'mtg',
         'can_edit': game in RENDERABLE_GAMES,

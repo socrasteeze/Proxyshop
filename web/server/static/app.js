@@ -617,6 +617,27 @@ function wireCardPopover(root = document) {
     }
     const pill = data.game_label
       ? ` <span class="pill">${escapeHtml(data.game_label)}</span>` : '';
+    // Scryfall-style "Prints" list — every other printing/art of this card.
+    const prints = data.prints || [];
+    let printsBlock = '';
+    if (prints.length > 1) {
+      const items = prints.map((p) => {
+        const meta = [(p.set || '').toUpperCase(),
+                      p.collector_number ? `#${p.collector_number}` : '',
+                      (p.lang && p.lang !== 'en') ? p.lang.toUpperCase() : '']
+          .filter(Boolean).join(' ');
+        return `<button type="button" class="print-tile${p.current ? ' is-current' : ''}"
+                  data-print-id="${escapeHtml(p.id)}" title="${escapeHtml(p.set_name || meta)}">
+          <img loading="lazy" src="${escapeHtml(p.thumb)}" alt="">
+          <span class="muted">${escapeHtml(meta)}</span>
+        </button>`;
+      }).join('');
+      printsBlock = `
+        <div class="prints-block">
+          <h3 class="prints-title">Prints · ${prints.length}</h3>
+          <div class="prints-grid">${items}</div>
+        </div>`;
+    }
     body.innerHTML = `
       <div class="card-frame">
         <img src="${escapeHtml(data.image_png || data.image_large || '')}"
@@ -626,7 +647,15 @@ function wireCardPopover(root = document) {
         <p style="margin:0 0 .7rem">${escapeHtml(data.name || '')}${pill}</p>
         <table><tbody>${details}${priceRow}</tbody></table>
         <p class="btn-row" style="margin-top:1rem">${actions.join('')}</p>
+        ${printsBlock}
       </div>`;
+    // Clicking a print swaps the modal to that printing.
+    body.querySelectorAll('.print-tile').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.printId;
+        if (id && id !== data.id) open(id, btn);
+      });
+    });
   }
 
   async function open(cardId, trigger) {
