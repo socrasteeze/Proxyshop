@@ -534,6 +534,89 @@ class CardDB:
             'SELECT game, COUNT(*) AS n FROM cards GROUP BY game').fetchall()
         return {str(r['game']): int(r['n']) for r in rows}
 
+    # Per-game gallery facets → (kind, json spec). 'scalar' reads one value;
+    # 'array' flattens a json array with json_each. The facet key matches the
+    # cardquery field name so the dropdowns compose into the same search syntax.
+    _FACET_SPECS: dict[str, dict[str, tuple]] = {
+        'pokemon': {
+            'supertype': ('scalar', "$.provider_data.supertype"),
+            'subtype': ('array', "$.provider_data.subtypes"),
+            'type': ('array', "$.provider_data.types"),
+            'rarity': ('scalar', "$.provider_data.rarity"),
+        },
+        'riftbound': {
+            'type': ('scalar', "$.provider_data.cardType"),
+            'domain': ('scalar', "$.provider_data.domain"),
+            'rarity': ('scalar', "$.provider_data.rarity"),
+        },
+        'mtg': {
+            'rarity': ('scalar', "$.rarity"),
+        },
+    }
+
+    def distinct_facets(self, game: str, limit: int = 200) -> dict[str, list[str]]:
+        """Distinct filter values actually present in the cache for a game.
+
+        Powers the Card-library dropdowns: only shows facets/values that exist
+        locally (accurate, offline, no live provider call). Returns
+        {facet: [values]} for facets that have any values.
+        """
+        game = (game or '').strip().lower()
+        specs = self._FACET_SPECS.get(game)
+        if not specs:
+            return {}
+        con = self._conn()
+        out: dict[str, list[str]] = {}
+        for facet, (kind, path) in specs.items():
+            if kind == 'scalar':
+                rows = con.execute(
+                    f"""
+                    SELECT DISTINCT json_extract(json, ?) AS v
+                    FROM cards WHERE game=?
+                      AND v IS NOT NULL AND TRIM(v) != ''
+                    ORDER BY v COLLATE NOCASE LIMIT ?
+                    """, (path, game, limit)).fetchall()
+            else:  # array: flatten with json_each (cards.json must be qualified)
+                rows = con.execute(
+                    f"""
+                    SELECT DISTINCT je.value AS v
+                    FROM cards, json_each(cards.json, ?) je
+                    WHERE cards.game=? AND je.value IS NOT NULL
+                      AND TRIM(je.value) != ''
+                    ORDER BY v COLLATE NOCASE LIMIT ?
+                    """, (path, game, limit)).fetchall()
+            values = [str(r['v']) for r in rows if r['v'] not in (None, '')]
+            if values:
+                out[facet] = values
+        return out
+
+    def distinct_sets(self, game: Optional[str] = None, limit: int = 1000) -> list[dict]:
+        """Distinct sets present in the cache as [{code, name}], for the set picker.
+
+        Scoped to a game when given, else across every game. Uses the
+        denormalized set_code + set_name columns/json so it stays fast.
+        """
+        con = self._conn()
+        where = ''
+        params: list[Any] = []
+        if game:
+            where = 'WHERE game=?'
+            params.append((game or '').strip().lower())
+        rows = con.execute(
+            f"""
+            SELECT set_code AS code,
+                   COALESCE(NULLIF(MAX(json_extract(json,'$.set_name')), ''),
+                            UPPER(set_code)) AS name,
+                   COUNT(*) AS n
+            FROM cards
+            {where}
+            {'AND' if where else 'WHERE'} set_code IS NOT NULL AND set_code != ''
+            GROUP BY set_code
+            ORDER BY name COLLATE NOCASE
+            LIMIT ?
+            """, (*params, limit)).fetchall()
+        return [{'code': r['code'], 'name': r['name'], 'count': int(r['n'])} for r in rows]
+
     # Language-independent grouping key so all printings/langs of one card
     # collapse together in the "combine arts" view:
     #   MTG          → oracle_id (Scryfall's cross-print id)

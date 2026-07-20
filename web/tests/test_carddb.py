@@ -134,6 +134,25 @@ class TestStoreAndLookup:
         assert cards[0]['id'] == 'pkm-2'
         assert cards[0]['art_count'] == 2
 
+    def test_distinct_facets_and_sets(self, carddb):
+        def pkm(cid, name, sup, subs, rarity, sset, sname):
+            c = make_card(cid, name, sset, '1')
+            c['game'] = 'pokemon'
+            c['set_name'] = sname
+            c['provider_data'] = {'supertype': sup, 'subtypes': subs,
+                                  'types': [], 'rarity': rarity}
+            return c
+        carddb.store_card(pkm('p1', 'Boss', 'Trainer', ['Supporter'], 'Rare Holo', 'sv1', 'Scarlet'), game='pokemon')
+        carddb.store_card(pkm('p2', 'Pika', 'Pokémon', ['Basic'], 'Common', 'base', 'Base Set'), game='pokemon')
+        facets = carddb.distinct_facets('pokemon')
+        assert facets['supertype'] == ['Pokémon', 'Trainer']
+        assert facets['subtype'] == ['Basic', 'Supporter']
+        assert facets['rarity'] == ['Common', 'Rare Holo']
+        sets = carddb.distinct_sets('pokemon')
+        assert {s['code'] for s in sets} == {'sv1', 'base'}
+        # Unknown/facet-less game returns empty
+        assert carddb.distinct_facets('union-arena') == {}
+
     def test_list_gallery_combine_riftbound_language_variants(self, carddb):
         # EN + JA + KO variants share riftbound_id → one group when combined,
         # even though their names differ per language.

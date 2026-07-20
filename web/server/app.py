@@ -303,6 +303,7 @@ GALLERY_FILTER_FIELDS = {
     'ftype': 'type',
     'fsupertype': 'supertype',
     'fsubtype': 'subtype',
+    'fdomain': 'domain',
     'frarity': 'rarity',
 }
 
@@ -321,6 +322,7 @@ def page_gallery(
     ftype: str = '',
     fsupertype: str = '',
     fsubtype: str = '',
+    fdomain: str = '',
     frarity: str = '',
 ):
     """Browse all locally cached cards as a gallery."""
@@ -340,8 +342,8 @@ def page_gallery(
         per_page = min(PER_PAGE_OPTIONS, key=lambda n: abs(n - per_page))
 
     gallery_filters = {
-        'ftype': ftype, 'fsupertype': fsupertype,
-        'fsubtype': fsubtype, 'frarity': frarity,
+        'ftype': ftype, 'fsupertype': fsupertype, 'fsubtype': fsubtype,
+        'fdomain': fdomain, 'frarity': frarity,
     }
     effective_q = _compose_gallery_query(
         q, {GALLERY_FILTER_FIELDS[k]: v for k, v in gallery_filters.items()})
@@ -407,11 +409,18 @@ def page_gallery(
         if pages not in nearby:
             page_links.append(pages)
 
+    # Facet dropdowns for the selected game, populated from what's actually
+    # cached locally (robust, offline, accurate to the library).
+    facets = carddb.distinct_facets(game) if game else {}
+    set_options = carddb.distinct_sets(game or None)
+
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,
         'q': q,
         'set_code': set,
         'filters': gallery_filters,
+        'facets': facets,
+        'set_options': set_options,
         'sort': sort,
         'page': page,
         'pages': pages,
