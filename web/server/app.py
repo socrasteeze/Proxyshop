@@ -34,7 +34,7 @@ from fastapi.templating import Jinja2Templates
 # Local Imports
 from web.server.db import JobStore
 from web.server import cache_runner
-from web.shared import games, images, sheets
+from web.shared import cardquery, games, images, sheets
 from web.shared.carddb import CardDB, GALLERY_SORTS
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
 from web.shared.schema import (
@@ -620,6 +620,18 @@ def _search_cards(q: str, limit: int, game: str = 'mtg') -> tuple[list[dict], st
         return carddb.search_local(q, limit=limit, game=None), 'local'
     if game not in games.GAMES:
         raise HTTPException(status_code=422, detail=f'Unknown game {game!r}')
+    # Scryfall Tagger queries (art:/otag:/function:/…) aren't in the local card
+    # data, so the normal local search can't answer them. Resolve from the
+    # offline tag cache if we've downloaded that tag; otherwise go straight to
+    # live Scryfall (online) or return empty with a hint (offline). Never fall
+    # through to a local field-scan, which would match the literal 'art:' text.
+    if game == 'mtg' and cardquery.has_tag_op(q):
+        tag_key = cardquery.normalize_tag(q)
+        if carddb.get_tag_cache(tag_key):
+            return carddb.search_tag_local(tag_key, limit=limit), 'tag-cache'
+        if OFFLINE:
+            return [], 'tag-uncached'
+        return carddb.search_scryfall(q, limit=limit), 'scryfall'
     results = carddb.search_local(q, limit=limit, game=game)
     if results:
         return results, 'local'
@@ -653,10 +665,16 @@ def page_search(request: Request, q: str = '', game: str = 'mtg'):
         except HTTPException as e:
             error = e.detail  # show provider problems inline instead of a bare 502
     prices = carddb.get_prices([c['id'] for c in results if c.get('id')])
+    # Tag-query hints: is this a Scryfall Tagger query, and is it already
+    # cached offline? Drives the "cache this tag for offline" affordance.
+    is_tag_query = bool(q) and game == 'mtg' and cardquery.has_tag_op(q)
+    tag_cached = bool(
+        is_tag_query and carddb.get_tag_cache(cardquery.normalize_tag(q)))
     return templates.TemplateResponse(request, 'search.html', {
         'q': q, 'game': game, 'games': games.GAME_LABELS,
         'catalog_games': list(games.CATALOG_GAMES),
         'results': results, 'source': source, 'prices': prices, 'error': error,
+        'is_tag_query': is_tag_query, 'tag_cached': tag_cached, 'tag_query': q,
         'offline': OFFLINE, 'stats': carddb.stats()})
 
 
@@ -1565,6 +1583,28 @@ def api_cache_jobs(request: Request):
     """Status for all catalog-game cache jobs."""
     rate_limit(request, 'api')
     return cache_runner.all_status(db=carddb, runs_dir=CACHE_RUNS_DIR)
+
+
+@app.get('/api/tags')
+def api_tags_list(request: Request):
+    """Cached Scryfall tags available for offline search."""
+    rate_limit(request, 'api')
+    return {'tags': carddb.list_cached_tags()}
+
+
+@app.post('/api/tags/delete')
+async def api_tags_delete(request: Request):
+    """Forget a cached tag (membership + catalog row)."""
+    rate_limit(request, 'api')
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    tag = (body.get('tag') or '').strip() if isinstance(body, dict) else ''
+    if not tag:
+        raise HTTPException(status_code=422, detail='tag is required')
+    removed = carddb.delete_tag(cardquery.normalize_tag(tag))
+    return {'ok': True, 'removed': removed, 'tag': cardquery.normalize_tag(tag)}
 
 
 @app.get('/api/cache-game/{game}/log')

@@ -45,6 +45,27 @@ class TestParser:
         assert params == []
 
 
+class TestTagOperators:
+
+    def test_has_tag_op_positive(self):
+        assert cardquery.has_tag_op('art:dragon')
+        assert cardquery.has_tag_op('otag:removal')
+        assert cardquery.has_tag_op('function:ramp')
+        assert cardquery.has_tag_op('r:mythic art:dragon')  # among other tokens
+
+    def test_has_tag_op_negation(self):
+        assert cardquery.has_tag_op('-art:elf')
+
+    def test_has_tag_op_negative(self):
+        assert not cardquery.has_tag_op('lightning bolt')
+        assert not cardquery.has_tag_op('t:creature o:draw')
+        assert not cardquery.has_tag_op('artist:"john avon"')  # 'artist:' is not a tag op
+
+    def test_normalize_tag(self):
+        assert cardquery.normalize_tag('  Art:Dragon  ') == 'art:dragon'
+        assert cardquery.normalize_tag('otag:Removal   is:Foil') == 'otag:removal is:foil'
+
+
 class TestFieldSearch:
     """End-to-end against a real SQLite DB via CardDB.search_local."""
 

@@ -9,6 +9,55 @@ from web.shared.carddb import CardDB, CollectionResult
 from web.tests.conftest import make_card
 
 
+class TestTagCache:
+
+    def _seed(self, carddb):
+        for cid, name in (('t-1', 'Shivan Dragon'), ('t-2', 'Dragon Whelp'),
+                          ('t-3', 'Llanowar Elves')):
+            carddb.store_card(make_card(cid, name, 'tst', cid[-1]))
+
+    def test_record_and_resolve(self, carddb):
+        self._seed(carddb)
+        n = carddb.record_tag('art:dragon', ['t-1', 't-2'])
+        assert n == 2
+        got = {c['name'] for c in carddb.search_tag_local('art:dragon')}
+        assert got == {'Shivan Dragon', 'Dragon Whelp'}
+        tc = carddb.get_tag_cache('art:dragon')
+        assert tc['count'] == 2 and tc['tag'] == 'art:dragon'
+
+    def test_normalized_key(self, carddb):
+        self._seed(carddb)
+        carddb.record_tag('Art:Dragon', ['t-1'])
+        # Stored + queried lowercased, so mixed-case lookups still hit.
+        assert carddb.get_tag_cache('art:dragon')['count'] == 1
+        assert len(carddb.search_tag_local('ART:DRAGON')) == 1
+
+    def test_refresh_replaces_membership(self, carddb):
+        self._seed(carddb)
+        carddb.record_tag('art:dragon', ['t-1', 't-2'])
+        # Re-running the tag with a smaller result drops the card that left it.
+        carddb.record_tag('art:dragon', ['t-1'])
+        got = {c['name'] for c in carddb.search_tag_local('art:dragon')}
+        assert got == {'Shivan Dragon'}
+        assert carddb.get_tag_cache('art:dragon')['count'] == 1
+
+    def test_list_and_delete(self, carddb):
+        self._seed(carddb)
+        carddb.record_tag('art:dragon', ['t-1'])
+        carddb.record_tag('otag:ramp', ['t-3'])
+        tags = {t['tag'] for t in carddb.list_cached_tags()}
+        assert tags == {'art:dragon', 'otag:ramp'}
+        assert carddb.delete_tag('art:dragon') is True
+        assert carddb.get_tag_cache('art:dragon') is None
+        assert carddb.search_tag_local('art:dragon') == []
+        # Deleting a tag leaves the card rows intact.
+        assert carddb.get_by_id('t-1') is not None
+
+    def test_uncached_tag_is_empty(self, carddb):
+        assert carddb.get_tag_cache('art:unknown') is None
+        assert carddb.search_tag_local('art:unknown') == []
+
+
 class TestStoreAndLookup:
 
     def test_store_and_get_by_set_number(self, carddb):

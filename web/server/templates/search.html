@@ -72,13 +72,17 @@
       </label>
     </div>
     <div class="field-row" style="margin-top:.7rem">
-      <label>Extra Scryfall tags
-        <input id="cf-mtg-tags" placeholder='otag:illustrated is:foil' autocomplete="off">
+      <label>Scryfall tags
+        <input id="cf-mtg-tags" placeholder='art:dragon  otag:removal  is:foil' autocomplete="off">
       </label>
       <label>Custom query (advanced)
         <input id="cf-mtg-q" placeholder="optional raw Scryfall query fragment" autocomplete="off">
       </label>
     </div>
+    <p class="muted" style="margin-top:.35rem">A download that includes a tag
+      (<code>art:</code>, <code>atag:</code>, <code>otag:</code>,
+      <code>function:</code>) is saved to your offline tag cache below, so the
+      search box can resolve it without a connection.</p>
     <label style="margin-top:.7rem;display:block">Image quality
       <select id="cf-mtg-kind">
         <option value="png">High-quality scan (PNG)</option>
@@ -86,6 +90,12 @@
         <option value="art_crop">Art-only crop</option>
       </select>
     </label>
+  </div>
+
+  <div id="cached-tags" hidden>
+    <div class="cached-tags-head">Offline tag cache</div>
+    <ul id="cached-tags-list" class="cached-tags-list"></ul>
+    <p class="muted" id="cached-tags-empty" hidden>No tags cached yet. Run a download with a Scryfall tag above to add one.</p>
   </div>
 
   <div id="cache-filters-pokemon" class="cache-filters" hidden>
@@ -166,7 +176,19 @@
   {% if error %}
   <p style="color: var(--err)">{{ error }}</p>
   {% endif %}
-  {% if results and source != 'local' %}
+  {% if is_tag_query %}
+    {% if source == 'tag-cache' %}
+    <p class="muted">✓ Resolved from your offline tag cache.
+      {% if not offline %}<button type="button" class="btn-ghost tag-inline-btn" id="cache-this-tag" data-tag="{{ tag_query }}">Refresh from Scryfall</button>{% endif %}
+    </p>
+    {% elif source == 'scryfall' %}
+    <p class="muted">Live Scryfall tag results — not cached locally yet.
+      <button type="button" class="btn-ghost tag-inline-btn" id="cache-this-tag" data-tag="{{ tag_query }}">Cache this tag for offline</button>
+    </p>
+    {% elif source == 'tag-uncached' %}
+    <p class="muted">This tag isn’t cached and you’re offline. Cache it from the download tool while connected, then it’ll resolve offline.</p>
+    {% endif %}
+  {% elif results and source != 'local' %}
   <p class="muted">No local matches — fetched online and saved for next time.</p>
   {% endif %}
   {% if results %}
@@ -464,10 +486,90 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;
+        // A run just finished — a tag download may have added/updated an entry.
+        if (body.status === 'done') refreshTags();
       }
     } catch (e) {
       statusEl.textContent = 'Could not load cache status.';
     }
+  }
+
+  async function refreshTags() {
+    const box = document.getElementById('cached-tags');
+    const list = document.getElementById('cached-tags-list');
+    const empty = document.getElementById('cached-tags-empty');
+    if (!box || !list) return;
+    box.hidden = game.value !== 'mtg';
+    if (box.hidden) return;
+    let tags = [];
+    try {
+      const res = await fetch('/api/tags');
+      if (res.ok) tags = (await res.json()).tags || [];
+    } catch (e) { return; }
+    list.innerHTML = '';
+    if (empty) empty.hidden = tags.length > 0;
+    tags.forEach((t) => {
+      const li = document.createElement('li');
+      li.className = 'cached-tag';
+      const a = document.createElement('a');
+      a.className = 'cached-tag-name';
+      a.href = '/search?game=mtg&q=' + encodeURIComponent(t.tag);
+      a.textContent = t.tag;
+      const meta = document.createElement('span');
+      meta.className = 'muted cached-tag-meta';
+      meta.textContent = `${t.count} card${t.count === 1 ? '' : 's'} · ${(t.cached_at || '').slice(0, 10)}`;
+      const actions = document.createElement('span');
+      actions.className = 'cached-tag-actions';
+      const refresh = document.createElement('button');
+      refresh.type = 'button';
+      refresh.className = 'btn-ghost';
+      refresh.textContent = 'Refresh';
+      refresh.disabled = offline;
+      refresh.title = 'Re-download this tag from Scryfall';
+      refresh.addEventListener('click', () => startTagDownload(t.tag));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn-ghost';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => removeTag(t.tag));
+      actions.append(refresh, remove);
+      li.append(a, meta, actions);
+      list.appendChild(li);
+    });
+  }
+
+  async function removeTag(tag) {
+    if (!confirm(
+      `Remove cached tag “${tag}”?\n\n`
+      + 'The cards stay in your library — only the offline tag membership is '
+      + 'forgotten, so this tag will need a connection to search again.')) return;
+    try {
+      await fetch('/api/tags/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag }),
+      });
+    } catch (e) { /* best-effort */ }
+    refreshTags();
+  }
+
+  // Cache a single tag for offline: isolate it in the MTG filters (so the
+  // stored key is exactly the tag) and kick off a download.
+  async function startTagDownload(tag) {
+    tag = (tag || '').trim();
+    if (!tag || offline) return;
+    game.value = 'mtg';
+    await syncPanel();
+    ['set', 'type', 'rarity', 'artist', 'year', 'q'].forEach((k) => {
+      const el = document.getElementById('cf-mtg-' + k);
+      if (el) el.value = '';
+    });
+    const art = document.getElementById('cf-mtg-art');
+    if (art) [...art.options].forEach((o) => { o.selected = false; });
+    const tagsEl = document.getElementById('cf-mtg-tags');
+    if (tagsEl) tagsEl.value = tag;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    postCache('start', false);
   }
 
   async function postCache(path, fresh) {
@@ -538,6 +640,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncFilters(g);
     try { await loadOptions(g); } catch (e) { /* options optional offline */ }
     refreshStatus();
+    refreshTags();
   }
 
   btnStart.addEventListener('click', () => postCache('start', false));
@@ -552,6 +655,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   btnStop.addEventListener('click', () => postCache('stop', false));
   game.addEventListener('change', syncPanel);
+  const inlineTagBtn = document.getElementById('cache-this-tag');
+  if (inlineTagBtn) {
+    inlineTagBtn.addEventListener('click', () => startTagDownload(inlineTagBtn.dataset.tag));
+  }
   syncPanel();
 });
 </script>

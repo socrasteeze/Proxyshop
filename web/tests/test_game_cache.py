@@ -313,3 +313,38 @@ class TestCacheGameResume:
         assert progress.stored == 2
         assert 'set:lea' in progress.query
         assert carddb.count_by_game('mtg') == 2
+
+    def test_mtg_tag_run_records_membership(self, carddb, tmp_path, monkeypatch):
+        first_page = ([
+            {'object': 'card', 'id': 'drg-1', 'name': 'Shivan Dragon',
+             'set': '2ed', 'collector_number': '175', 'lang': 'en'},
+            {'object': 'card', 'id': 'drg-2', 'name': 'Dragon Whelp',
+             'set': '2ed', 'collector_number': '172', 'lang': 'en'},
+        ], 2, False)
+
+        def fake_page(query, page=1, store=False):
+            assert 'art:dragon' in query  # the tag is carried into the query
+            return first_page if page == 1 else ([], 2, False)
+
+        monkeypatch.setattr(carddb, 'list_scryfall_page', fake_page)
+        monkeypatch.setattr(game_cache.images, 'ensure_image', lambda *a, **k: None)
+        monkeypatch.setattr(
+            game_cache.images, 'cached_image_path', lambda *a, **k: None)
+
+        progress = game_cache.run_cache_game(
+            db=carddb,
+            game='mtg',
+            images_dir=tmp_path / 'images',
+            runs_dir=tmp_path / 'runs',
+            filters={'tags': 'art:dragon'},
+            download_images=False,
+            fresh=True,
+            use_signals=False,
+            print_fn=lambda *a, **k: None,
+        )
+        assert progress.status == 'done'
+        # Membership persisted under the bare tag (no unique:prints sentinel).
+        tc = carddb.get_tag_cache('art:dragon')
+        assert tc and tc['count'] == 2
+        got = {c['name'] for c in carddb.search_tag_local('art:dragon')}
+        assert got == {'Shivan Dragon', 'Dragon Whelp'}

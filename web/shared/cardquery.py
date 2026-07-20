@@ -22,6 +22,38 @@ def fold_value(text: str) -> str:
     """Lowercase a query value and fold the é we also fold on the SQL side."""
     return str(text or '').lower().replace('é', 'e')
 
+
+# Scryfall Tagger operators. These are crowd-sourced tags that live only in
+# Scryfall's search index — they are absent from bulk/API card objects, so the
+# local DB can only answer them from a previously downloaded tag cache. Any
+# query containing one is treated as a "tag" query (routed live or resolved
+# from the offline tag cache) rather than a normal local field search.
+TAG_OPERATORS: tuple[str, ...] = (
+    'art:', 'atag:', 'arttag:',
+    'otag:', 'oracletag:',
+    'function:', 'func:',
+)
+
+
+def has_tag_op(query: str) -> bool:
+    """True if any whitespace-delimited token uses a Scryfall Tagger operator.
+
+    A leading ``-`` (negation) is ignored so ``-art:elf`` still counts.
+    """
+    for tok in str(query or '').lower().split():
+        if tok.lstrip('-').startswith(TAG_OPERATORS):
+            return True
+    return False
+
+
+def normalize_tag(query: str) -> str:
+    """Canonical key for a tag query: lowercased, whitespace-collapsed.
+
+    So ``Art:Dragon`` and ``art:dragon`` share one cache entry, and the search
+    box matches what the download tool stored.
+    """
+    return ' '.join(str(query or '').lower().split())
+
 # Per-game field → SQL expression yielding lowercased searchable text.
 # Array fields (subtypes/types/colors) are flattened with json_each. Every
 # json path is optional: COALESCE keeps rows without the field searchable.

@@ -126,6 +126,22 @@ CREATE TABLE IF NOT EXISTS prices (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Offline-resolvable Scryfall tags (art:/otag:/function:/…). tag_cache is the
+-- catalog of tags we've downloaded; card_tags is the per-tag membership so a
+-- tag search resolves locally without hitting Scryfall.
+CREATE TABLE IF NOT EXISTS tag_cache (
+    tag TEXT PRIMARY KEY,
+    label TEXT,
+    count INTEGER NOT NULL DEFAULT 0,
+    cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS card_tags (
+    tag TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    PRIMARY KEY (tag, card_id)
+);
+CREATE INDEX IF NOT EXISTS idx_card_tags_tag ON card_tags (tag);
+
 CREATE TABLE IF NOT EXISTS decks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -998,6 +1014,88 @@ class CardDB:
             card.setdefault('game', r['game'] or 'mtg')
             out.append(card)
         return out
+
+    # ---- Offline tag cache (Scryfall art:/otag:/function:/… memberships) ----
+
+    def record_tag(
+        self,
+        tag: str,
+        card_ids: Iterable[str],
+        label: Optional[str] = None,
+    ) -> int:
+        """Persist a tag's membership so it resolves offline.
+
+        Replaces any existing membership for ``tag`` (so a refresh drops cards
+        that left the tag). ``card_ids`` are the ids returned by the tag's
+        Scryfall query; the card rows themselves are stored separately by the
+        cache run. Returns the number of members recorded.
+        """
+        tag = (tag or '').strip().lower()
+        if not tag:
+            return 0
+        ids = [i for i in dict.fromkeys(card_ids) if i]  # de-dup, keep order
+        con = self._conn()
+        stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        con.execute('DELETE FROM card_tags WHERE tag=?', (tag,))
+        con.executemany(
+            'INSERT OR IGNORE INTO card_tags (tag, card_id) VALUES (?, ?)',
+            [(tag, cid) for cid in ids])
+        con.execute(
+            """
+            INSERT INTO tag_cache (tag, label, count, cached_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tag) DO UPDATE SET
+                label=excluded.label,
+                count=excluded.count,
+                cached_at=excluded.cached_at
+            """,
+            (tag, (label or tag).strip(), len(ids), stamp))
+        con.commit()
+        return len(ids)
+
+    def get_tag_cache(self, tag: str) -> Optional[dict]:
+        """Catalog row for one cached tag, or None if it isn't cached."""
+        tag = (tag or '').strip().lower()
+        if not tag:
+            return None
+        row = self._conn().execute(
+            'SELECT tag, label, count, cached_at FROM tag_cache WHERE tag=?',
+            (tag,)).fetchone()
+        return dict(row) if row else None
+
+    def list_cached_tags(self) -> list[dict]:
+        """All cached tags, most recently refreshed first (for the UI)."""
+        rows = self._conn().execute(
+            'SELECT tag, label, count, cached_at FROM tag_cache '
+            'ORDER BY cached_at DESC, tag ASC').fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_tag(self, tag: str) -> bool:
+        """Forget a cached tag (membership + catalog). True if it existed."""
+        tag = (tag or '').strip().lower()
+        if not tag:
+            return False
+        con = self._conn()
+        con.execute('DELETE FROM card_tags WHERE tag=?', (tag,))
+        cur = con.execute('DELETE FROM tag_cache WHERE tag=?', (tag,))
+        con.commit()
+        return cur.rowcount > 0
+
+    def search_tag_local(self, tag: str, limit: int = 50) -> list[dict]:
+        """Resolve a cached tag from local membership (no network)."""
+        tag = (tag or '').strip().lower()
+        if not tag:
+            return []
+        rows = self._conn().execute(
+            """
+            SELECT c.id AS id, c.game AS game, c.json AS json
+            FROM card_tags t JOIN cards c ON c.id = t.card_id
+            WHERE t.tag = ?
+            ORDER BY c.name COLLATE NOCASE ASC, c.released_at DESC
+            LIMIT ?
+            """,
+            (tag, max(int(limit), 1))).fetchall()
+        return self._rows_to_cards(rows, tag)
 
     def search_scryfall(self, text: str, limit: int = 30) -> list[dict]:
         """Name search against the live Scryfall API; results are cached.

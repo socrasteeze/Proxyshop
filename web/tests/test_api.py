@@ -770,6 +770,75 @@ class TestDeckImport:
         assert body2['cards'][0]['name'] == 'Black Lotus'
 
 
+class TestTagCache:
+
+    def test_cached_tag_resolves_locally(self, appmod, client):
+        # Seed two dragons + record the tag membership, then search offline.
+        for cid, name in (('d-1', 'Shivan Dragon'), ('d-2', 'Dragon Whelp')):
+            appmod.carddb.store_card(make_card(cid, name, 'tst', cid[-1]))
+        appmod.carddb.record_tag('art:dragon', ['d-1', 'd-2'])
+        body = client.get('/api/cards/search',
+                          params={'q': 'art:dragon', 'game': 'mtg'}).json()
+        assert body['source'] == 'tag-cache'
+        assert {c['name'] for c in body['cards']} == {'Shivan Dragon', 'Dragon Whelp'}
+
+    def test_uncached_tag_offline_is_empty(self, appmod, client):
+        # Offline + not cached → no local field-scan for the literal 'art:' text.
+        body = client.get('/api/cards/search',
+                          params={'q': 'art:dragon', 'game': 'mtg'}).json()
+        assert body['source'] == 'tag-uncached'
+        assert body['cards'] == []
+
+    def test_uncached_tag_goes_live(self, appmod, client):
+        appmod.OFFLINE = False
+        appmod.carddb.offline = False
+
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return {'object': 'list',
+                        'data': [make_card('api-d', 'Bane of the Living', 'tst', '9')]}
+
+        class FakeSession:
+            def get(self, url, **kwargs):
+                return FakeResponse()
+
+        appmod.carddb._session = FakeSession()
+        body = client.get('/api/cards/search',
+                          params={'q': 'art:dragon', 'game': 'mtg'}).json()
+        assert body['source'] == 'scryfall'
+
+    def test_tags_api_list_and_delete(self, appmod, client):
+        appmod.carddb.store_card(make_card('d-1', 'Shivan Dragon', 'tst', '1'))
+        appmod.carddb.record_tag('art:dragon', ['d-1'])
+        listing = client.get('/api/tags').json()
+        assert listing['tags'][0]['tag'] == 'art:dragon'
+        assert listing['tags'][0]['count'] == 1
+        r = client.post('/api/tags/delete', json={'tag': 'art:dragon'})
+        assert r.status_code == 200 and r.json()['removed'] is True
+        assert client.get('/api/tags').json()['tags'] == []
+
+    def test_tags_delete_requires_tag(self, client):
+        assert client.post('/api/tags/delete', json={}).status_code == 422
+
+    def test_search_page_offers_to_cache_tag(self, appmod, client):
+        appmod.OFFLINE = False
+        appmod.carddb.offline = False
+
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return {'object': 'list', 'data': []}
+
+        class FakeSession:
+            def get(self, url, **kwargs):
+                return FakeResponse()
+
+        appmod.carddb._session = FakeSession()
+        html = client.get('/search', params={'q': 'art:dragon', 'game': 'mtg'}).text
+        assert 'Cache this tag for offline' in html
+
+
 class TestCacheGameApi:
 
     def test_status_idle(self, client):

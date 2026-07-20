@@ -20,6 +20,7 @@ from web.shared.cache_filters import (
     CACHEABLE_GAMES, SELECTIVE_GAMES, build_provider_query, describe_filters,
     filters_equal, filters_require_selection, friendly_filters,
     normalize_filters)
+from web.shared.cardquery import has_tag_op, normalize_tag
 from web.shared.carddb import CardDB
 
 STOP_SUFFIX = '.stop'
@@ -284,6 +285,12 @@ def _store_and_image(
     to_image: list[dict] = [card]
     db.store_card(card, source='catalog', game=progress.game, commit=False)
     progress.stored += 1
+    # For a tag download, remember which cards matched so the membership can be
+    # persisted at the end (see run_cache_game). `collect_ids` is a runtime-only
+    # attribute — not a checkpoint field — so it never touches serialization.
+    collect = getattr(progress, 'collect_ids', None)
+    if collect is not None and card.get('id'):
+        collect.add(card['id'])
     # Riftbound: also store official JA/KO name rows (same art URL, searchable)
     if (
         progress.game == 'riftbound'
@@ -437,6 +444,15 @@ def run_cache_game(
     save_checkpoint(ck_path, progress)
     print_fn(f'==> Query: {progress.query or "(full catalog)"}')
 
+    # Tag download: collect the ids of every card matched so the tag membership
+    # can be persisted for offline search when the run finishes. Only MTG
+    # (Scryfall) exposes tag operators. `collect_ids` is a runtime attribute,
+    # deliberately not a checkpoint field.
+    record_tag = (
+        game == 'mtg' and not images_only and has_tag_op(progress.query))
+    if record_tag:
+        progress.collect_ids = set()
+
     prev_provider = games._provider_limiter.min_interval
     prev_image = getattr(db.session, '_min_interval', None)
     games._provider_limiter.set_interval(max(prev_provider, CACHE_PROVIDER_INTERVAL))
@@ -454,6 +470,18 @@ def run_cache_game(
             progress.touch('complete')
             save_checkpoint(ck_path, progress)
             clear_stop(runs_dir, game)
+            if record_tag:
+                # Key the tag by the user-facing expression, dropping the
+                # auto-appended `unique:prints` sentinel so the search box
+                # ('art:dragon') matches what we stored.
+                ids = getattr(progress, 'collect_ids', None) or set()
+                tag_key = normalize_tag(' '.join(
+                    t for t in progress.query.split()
+                    if not t.lower().startswith('unique:')))
+                if tag_key and ids:
+                    n = db.record_tag(tag_key, ids, label=tag_key)
+                    print_fn(
+                        f'==> Cached tag "{tag_key}" ({n} cards) for offline search')
             print_fn(
                 f'==> Done {game}: stored={progress.stored} '
                 f'images_ok={progress.images_ok} skip={progress.images_skip} '
