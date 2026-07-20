@@ -319,6 +319,7 @@ def page_gallery(
     per_page: int = 60,
     view: str = 'grid',
     arts: str = 'unique',
+    series: str = '',
     ftype: str = '',
     fsupertype: str = '',
     fsubtype: str = '',
@@ -348,10 +349,23 @@ def page_gallery(
     effective_q = _compose_gallery_query(
         q, {GALLERY_FILTER_FIELDS[k]: v for k, v in gallery_filters.items()})
 
+    # Series (IP) groups several sets under one anime/franchise. Selecting a
+    # series filters to all its sets; a specific Set narrows within it.
+    series_options = carddb.series_list(game) if game else []
+    series = (series or '').strip()
+    series_sets = next(
+        (s['sets'] for s in series_options if s['series'] == series), None)
+    # Set picklist is scoped to the selected series when one is active.
+    if series and series_sets is not None:
+        set_options = [s for s in carddb.distinct_sets(game) if s['code'] in series_sets]
+    else:
+        set_options = carddb.distinct_sets(game) if game else []
+
     cards, total = carddb.list_gallery(
         game=game or None,
         q=effective_q,
         set_code=set,
+        set_codes=series_sets if not set else None,
         offset=(page - 1) * per_page,
         limit=per_page,
         sort=sort,
@@ -367,6 +381,7 @@ def page_gallery(
             game=game or None,
             q=effective_q,
             set_code=set,
+            set_codes=series_sets if not set else None,
             offset=(page - 1) * per_page,
             limit=per_page,
             sort=sort,
@@ -385,12 +400,15 @@ def page_gallery(
         g = overrides.get('game', game)
         qq = overrides.get('q', q)
         ss = overrides.get('set', set)
+        sr = overrides.get('series', series)
         if g:
             params['game'] = g
         if qq:
             params['q'] = qq
         if ss:
             params['set'] = ss
+        if sr:
+            params['series'] = sr
         # Carry structured dropdown filters across pagination/sort links unless
         # explicitly overridden (e.g. Clear filters passes them empty).
         for key in GALLERY_FILTER_FIELDS:
@@ -412,14 +430,17 @@ def page_gallery(
     # Facet dropdowns for the selected game, populated from what's actually
     # cached locally (robust, offline, accurate to the library).
     facets = carddb.distinct_facets(game) if game else {}
-    # Per-game set picklist (a specific game keeps the list focused; 'All games'
-    # would mix hundreds of MTG sets with everything else, so use free text there).
-    set_options = carddb.distinct_sets(game) if game else []
+    # Only surface the Series picker when it actually groups sets (i.e. some IP
+    # spans multiple sets, as in Union Arena) — otherwise it just mirrors Set.
+    show_series = bool(game) and len(series_options) < sum(
+        1 for _ in carddb.distinct_sets(game))
 
     return templates.TemplateResponse(request, 'gallery.html', {
         'game': game,
         'q': q,
         'set_code': set,
+        'series': series,
+        'series_options': series_options if show_series else [],
         'filters': gallery_filters,
         'facets': facets,
         'set_options': set_options,

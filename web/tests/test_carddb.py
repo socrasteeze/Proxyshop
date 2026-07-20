@@ -190,6 +190,28 @@ class TestStoreAndLookup:
     def test_list_art_group_unknown_returns_empty(self, carddb):
         assert carddb.list_art_group('nope') == []
 
+    def test_series_list_and_set_codes_filter(self, carddb):
+        def ua(cid, name, sc, sn):
+            c = make_card(cid, name, sc, '1')
+            c['game'] = 'union-arena'
+            c['set_name'] = sn
+            return c
+        carddb.store_card(ua('u1', 'A1', 'ue10bt', 'Attack on Titan [UE10BT]'), game='union-arena')
+        carddb.store_card(ua('u2', 'A2', 'ue10st', 'Attack on Titan [UE10ST]'), game='union-arena')
+        carddb.store_card(ua('u3', 'B1', 'ue08bt', 'Black Clover [UE08BT]'), game='union-arena')
+        series = carddb.series_list('union-arena')
+        aot = next(s for s in series if s['series'] == 'Attack on Titan')
+        assert aot['count'] == 2
+        assert set(aot['sets']) == {'ue10bt', 'ue10st'}
+        # Filter by the series' sets → both AoT cards, not Black Clover
+        cards, total = carddb.list_gallery(game='union-arena', set_codes=aot['sets'])
+        assert total == 2
+        assert {c['id'] for c in cards} == {'u1', 'u2'}
+
+    def test_series_name_strips_brackets(self, carddb):
+        assert carddb._series_name('Attack on Titan [UE10BT]', 'ue10bt') == 'Attack on Titan'
+        assert carddb._series_name('BLEACH 千年血戦篇 【UA08BT】', 'ua08bt') == 'BLEACH 千年血戦篇'
+
     def test_list_gallery_combine_union_arena_by_card_no(self, carddb):
         def ua(cid, name, lang):
             c = make_card(cid, name, 'UE02BT', 'HTR-1-005', lang=lang)

@@ -14,6 +14,7 @@ Scryfall API etiquette implemented here (https://scryfall.com/docs/api):
 # Standard Library Imports
 import calendar
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -585,6 +586,32 @@ class CardDB:
             }
             for r in rows]
 
+    @staticmethod
+    def _series_name(set_name: str, set_code: str) -> str:
+        """Derive the IP/series from a set name by stripping the bracketed code.
+
+        'Attack on Titan [UE10BT]' → 'Attack on Titan'
+        'BLEACH 千年血戦篇 【UA08BT】' → 'BLEACH 千年血戦篇'
+        Falls back to the upper-cased set code when nothing's left.
+        """
+        name = re.sub(r'[\[【][^\]】]*[\]】]', '', set_name or '')
+        name = re.sub(r'\s+', ' ', name).strip(' -·')
+        return name or (set_code or '').upper()
+
+    def series_list(self, game: str) -> list[dict]:
+        """Group a game's sets into IP/series: [{series, sets:[codes], count}].
+
+        Sorted by series name. Useful when several sets share one IP
+        (e.g. Union Arena booster + starter of the same anime).
+        """
+        groups: dict[str, dict] = {}
+        for s in self.distinct_sets(game):
+            series = self._series_name(s.get('name', ''), s.get('code', ''))
+            g = groups.setdefault(series, {'series': series, 'sets': [], 'count': 0})
+            g['sets'].append(s['code'])
+            g['count'] += int(s.get('count', 0))
+        return sorted(groups.values(), key=lambda g: g['series'].lower())
+
     def distinct_facets(self, game: str, limit: int = 200) -> dict[str, list[str]]:
         """Distinct filter values actually present in the cache for a game.
 
@@ -675,6 +702,7 @@ class CardDB:
         game: Optional[str] = None,
         q: str = '',
         set_code: str = '',
+        set_codes: Optional[list] = None,
         offset: int = 0,
         limit: int = 60,
         sort: str = 'name',
@@ -709,6 +737,12 @@ class CardDB:
         if set_code.strip():
             where.append('set_code=?')
             params.append(set_code.strip().lower())
+        elif set_codes:
+            # Series filter: any set within the chosen IP
+            codes = [c.strip().lower() for c in set_codes if c and c.strip()]
+            if codes:
+                where.append(f"set_code IN ({','.join('?' * len(codes))})")
+                params.extend(codes)
         clause = ' AND '.join(where)
         order = {
             'name': 'name COLLATE NOCASE ASC, set_code ASC, collector_number ASC',

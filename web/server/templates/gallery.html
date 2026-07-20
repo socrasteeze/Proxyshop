@@ -24,10 +24,20 @@
     <label>Card name
       <input name="q" id="gallery-q" value="{{ q }}" placeholder="Name, or t:creature o:draw supertype:trainer…" autocomplete="off" title="Plain text searches name, type, rules text and subtypes. Field syntax: t: type, o: rules text, r: rarity, set:, artist:, supertype:, subtype:">
     </label>
+    {% if series_options %}
+    <label>Series / IP
+      <select name="series" id="gallery-series">
+        <option value="">All series</option>
+        {% for s in series_options %}
+        <option value="{{ s.series }}" {% if series == s.series %}selected{% endif %}>{{ s.series }} ({{ s.count }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
     <label>Set
       {% if set_options %}
       <select name="set" id="gallery-set">
-        <option value="">All sets</option>
+        <option value="">{% if series %}All {{ series }} sets{% else %}All sets{% endif %}</option>
         {% for s in set_options %}
         <option value="{{ s.code }}" {% if set_code == s.code %}selected{% endif %}>{{ s.name }} ({{ s.count }})</option>
         {% endfor %}
@@ -71,6 +81,13 @@
   document.addEventListener('DOMContentLoaded', () => {
     const gameSel = document.getElementById('gallery-game');
     if (gameSel) gameSel.addEventListener('change', () => gameSel.form.submit());
+    // Changing the Series re-scopes the Set list, so clear Set and submit.
+    const seriesSel = document.getElementById('gallery-series');
+    if (seriesSel) seriesSel.addEventListener('change', () => {
+      const setSel = document.getElementById('gallery-set');
+      if (setSel) setSel.value = '';
+      seriesSel.form.submit();
+    });
   });
   </script>
   <div class="gallery-chips">
