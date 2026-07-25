@@ -14,9 +14,10 @@
 # One-time setup on the NAS:
 #   nohup sh nas-watch.sh >/dev/null 2>&1 &
 #
-# Better: have it start on boot. Either add that line to your NAS startup
-# script, or install a cron entry that keeps it alive:
-#   */5 * * * * pgrep -f nas-watch.sh >/dev/null || nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
+# Only one instance runs at a time — a second start exits immediately with
+# "Already running", so it's safe to launch this from cron unconditionally:
+#   */5 * * * * nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
+# That doubles as a keep-alive: if the watcher dies, the next tick restarts it.
 #
 # Check it once:  DATA_DIR=/Volume1/proxyshop/data ONE_SHOT=1 sh nas-watch.sh
 # ============================================================================
@@ -34,17 +35,40 @@ CLAIMED="$DIR/request.claimed.json"
 STATUS="$DIR/status.json"
 BEAT="$DIR/watch.json"
 LOG="$DIR/update.log"
+LOCK="$DIR/watch.lock"
 
 mkdir -p "$DIR"
 
 now_epoch() { date +%s; }
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Atomic write, so the app never reads a half-written file.
+# Atomic write, so the app never reads a half-written file. The temp name
+# carries the pid: two watchers sharing one scratch file would interleave
+# their writes and publish corrupt JSON.
 write_file() {
   # $1 = destination, stdin = contents
-  cat > "$1.part"
-  mv "$1.part" "$1"
+  cat > "$1.$$.part"
+  mv "$1.$$.part" "$1"
+}
+
+# Single instance. `mkdir` is atomic on POSIX, so it doubles as a lock; the pid
+# inside lets a later run tell "already running" from "killed without cleanup".
+acquire_lock() {
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo $$ > "$LOCK/pid"
+    trap 'rm -rf "$LOCK"' EXIT INT TERM
+    return 0
+  fi
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+    return 1  # a live watcher holds it
+  fi
+  # Stale lock from a killed watcher — take it over.
+  rm -rf "$LOCK"
+  mkdir "$LOCK" 2>/dev/null || return 1
+  echo $$ > "$LOCK/pid"
+  trap 'rm -rf "$LOCK"' EXIT INT TERM
+  return 0
 }
 
 heartbeat() {
@@ -83,6 +107,11 @@ run_update() {
     write_status failed "$code" "Update failed — see the log above"
   fi
 }
+
+if ! acquire_lock; then
+  echo "==> Already running (pid $(cat "$LOCK/pid" 2>/dev/null || echo '?')) — nothing to do."
+  exit 0  # exit 0 so a cron keep-alive doesn't treat this as a failure
+fi
 
 echo "==> Watching $REQUEST (every ${POLL_SECONDS}s); update script: $UPDATE_SCRIPT"
 

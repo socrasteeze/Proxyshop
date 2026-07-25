@@ -321,11 +321,12 @@ runs the deploy. State lives on `/data` precisely so it survives the restart.
 nohup sh ~/proxyshop-web/nas-watch.sh >/dev/null 2>&1 &
 ```
 
-To have it come back after a reboot, add that line to your NAS startup script,
-or install a cron entry that keeps it alive:
+Only one instance runs at a time — starting a second exits immediately with
+"Already running" — so it's safe to launch from cron unconditionally, which
+doubles as a keep-alive across reboots and crashes:
 
 ```
-*/5 * * * * pgrep -f nas-watch.sh >/dev/null || nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
+*/5 * * * * nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
 ```
 
 The watcher heartbeats every 15s. Settings shows "Host updater offline" and
