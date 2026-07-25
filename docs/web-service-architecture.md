@@ -321,12 +321,20 @@ runs the deploy. State lives on `/data` precisely so it survives the restart.
 nohup sh ~/proxyshop-web/nas-watch.sh >/dev/null 2>&1 &
 ```
 
-Only one instance runs at a time — starting a second exits immediately with
-"Already running" — so it's safe to launch from cron unconditionally, which
-doubles as a keep-alive across reboots and crashes:
+Confirm it came up — this should print a recent `at` timestamp:
 
 ```
-*/5 * * * * nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
+cat /Volume1/proxyshop/data/update/watch.json
+```
+
+Only one instance runs at a time — starting a second exits immediately with
+"Already running" — so it's safe to launch from cron unconditionally, which
+doubles as a keep-alive across reboots and crashes. Install the entry with
+`crontab -e`, or in one shot (note this is a *crontab line*, not something to
+paste into a shell — a shell would just report `*/5: command not found`):
+
+```
+(crontab -l 2>/dev/null; echo '*/5 * * * * nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &') | crontab -
 ```
 
 The watcher heartbeats every 15s. Settings shows "Host updater offline" and
