@@ -8,6 +8,8 @@ Environment:
     PROXYSHOP_WORKER_TOKEN  Bearer token for /api/worker/* (default: dev-token)
     PROXYSHOP_OFFLINE       '1' = never call Scryfall (cache/bulk only)
     PROXYSHOP_MAX_UPLOAD_MB Upload cap for art files (default: 50)
+    PROXYSHOP_BUILD_*       COMMIT/BRANCH/AT, stamped by nas-update.sh and
+                            shown on the Settings page (optional)
 """
 # Standard Library Imports
 import asyncio
@@ -33,7 +35,7 @@ from fastapi.templating import Jinja2Templates
 
 # Local Imports
 from web.server.db import JobStore
-from web.server import cache_runner
+from web.server import cache_runner, updater
 from web.shared import cardquery, games, images, sheets
 from web.shared.carddb import CardDB, GALLERY_SORTS
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
@@ -86,6 +88,7 @@ RATE_LIMITS = {
     'api': (120, 60),        # general API reads
     'image': (300, 60),      # image serves (mostly cache hits; grids load many)
     'cache': (6, 60),        # start/stop full-TCG cache runs
+    'update': (3, 300),      # deploy update requests (each rebuilds the image)
 }
 _hits: dict[tuple[str, str], deque] = defaultdict(deque)
 
@@ -717,6 +720,48 @@ def page_logs(request: Request, game: str = 'mtg'):
         'games': games.GAME_LABELS,
         'catalog_games': list(games.CATALOG_GAMES),
     })
+
+
+@app.get('/settings', response_class=HTMLResponse)
+def page_settings(request: Request):
+    """Server settings + the deploy update button."""
+    return templates.TemplateResponse(request, 'settings.html', {
+        'version': updater.app_version(),
+        'update': updater.status(DATA_DIR, include_log=True),
+        'offline': OFFLINE,
+        'data_dir': str(DATA_DIR),
+        'counts': carddb.counts_by_game(),
+    })
+
+
+"""
+* Public API: Updates
+
+The app can't run nas-update.sh itself — it lives inside the container that
+script rebuilds. These endpoints hand the request to the host watcher instead;
+see web/server/updater.py and nas-watch.sh.
+"""
+
+
+@app.get('/api/update')
+def api_update_status(request: Request, log: int = 1):
+    rate_limit(request, 'api')
+    payload = updater.status(DATA_DIR, include_log=bool(log))
+    payload['version'] = updater.app_version()
+    return payload
+
+
+@app.post('/api/update')
+def api_request_update(request: Request):
+    rate_limit(request, 'update')
+    if not updater.watcher_online(DATA_DIR):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                'The host updater is not running, so nothing would pick this '
+                'up. Start it on the NAS: sh nas-watch.sh &'))
+    client = request.client.host if request.client else ''
+    return updater.request_update(DATA_DIR, requested_by=client)
 
 
 """

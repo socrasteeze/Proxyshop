@@ -304,7 +304,40 @@ type %USERPROFILE%\.ssh\id_ed25519.pub | ssh <user>@<nas> "cat >> ~/.ssh/authori
 nas-refresh.bat
 ```
 
+### Updating from the web UI (`nas-watch.sh`)
+
+Settings → **Update & restart** runs the same deploy without a terminal. It
+needs one piece of host-side setup, because the app cannot run `nas-update.sh`
+itself: the app is *inside* the `proxyshop-web` container, and the script stops
+and rebuilds that container — the process would be killed halfway through, and
+the container has no docker CLI, no docker socket, and no `~/.gh-token`.
+
+So the button writes a request file to the shared data volume, and
+`nas-watch.sh` — a small loop on the NAS host, outside Docker — picks it up and
+runs the deploy. State lives on `/data` precisely so it survives the restart.
+
+```
+# On the NAS, once:
+nohup sh ~/proxyshop-web/nas-watch.sh >/dev/null 2>&1 &
+```
+
+To have it come back after a reboot, add that line to your NAS startup script,
+or install a cron entry that keeps it alive:
+
+```
+*/5 * * * * pgrep -f nas-watch.sh >/dev/null || nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &
+```
+
+The watcher heartbeats every 15s. Settings shows "Host updater offline" and
+disables the button when that heartbeat goes stale, so the button never
+silently does nothing. Live output from the run is streamed to the same page,
+and the deployed commit is shown under **Build**.
+
 Notes:
+- Match `DATA_DIR` in `nas-watch.sh` to the one in `nas-update.sh`; it is the
+  host path mounted at `/data`.
+- Verify the wiring without deploying:
+  `DATA_DIR=/Volume1/proxyshop/data ONE_SHOT=1 sh nas-watch.sh`
 - The script deploys from the branch named in its config block (`main` by
   default).
 - TerraMaster mounts live under `/Volume1` (capital V), Synology under

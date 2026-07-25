@@ -4,9 +4,80 @@
 # Standard Library Imports
 import json
 
+# Third Party Imports
+import pytest
+
 # Local Imports
-from web.shared.carddb import CardDB, CollectionResult
+from web.shared import carddb as carddb_mod
+from web.shared.carddb import CardDB, CollectionResult, ScryfallSession
 from web.tests.conftest import make_card
+
+
+class _Res:
+    def __init__(self, code, headers=None):
+        self.status_code = code
+        self.headers = dict(headers or {})
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestSessionRetries:
+    """Image/API fetches must ride out transient upstream failures."""
+
+    def _session(self, monkeypatch, responses):
+        monkeypatch.setattr(carddb_mod.time, 'sleep', lambda *_: None)
+        session = ScryfallSession(min_interval=0)
+        calls = {'n': 0}
+
+        def fake_request(method, url, **kwargs):
+            calls['n'] += 1
+            return responses[min(calls['n'] - 1, len(responses) - 1)]
+
+        monkeypatch.setattr(session._session, 'request', fake_request)
+        return session, calls
+
+    @pytest.mark.parametrize('code', [500, 502, 503, 504, 408, 429])
+    def test_transient_status_retried_then_ok(self, monkeypatch, code):
+        ok = _Res(200)
+        session, calls = self._session(
+            monkeypatch, [_Res(code, {'Retry-After': '0'}), ok])
+        assert session.get('https://img.example/x.png').status_code == 200
+        assert calls['n'] == 2
+
+    def test_gives_up_and_returns_last_response(self, monkeypatch):
+        session, calls = self._session(monkeypatch, [_Res(503)])
+        assert session.get('https://img.example/x.png').status_code == 503
+        assert calls['n'] == carddb_mod.MAX_RETRIES + 1
+
+    @pytest.mark.parametrize('code', [200, 301, 404, 422])
+    def test_final_statuses_returned_immediately(self, monkeypatch, code):
+        session, calls = self._session(monkeypatch, [_Res(code)])
+        assert session.get('https://img.example/x.png').status_code == code
+        assert calls['n'] == 1
+
+    def test_discarded_response_is_closed(self, monkeypatch):
+        """stream=True keeps a pooled connection open until the body is closed."""
+        bad = _Res(503, {'Retry-After': '0'})
+        session, _ = self._session(monkeypatch, [bad, _Res(200)])
+        session.get('https://img.example/x.png', stream=True)
+        assert bad.closed is True
+
+    def test_retry_after_bounds(self):
+        assert carddb_mod.retry_after_seconds(
+            _Res(503, {'Retry-After': '9999'}), 1) == carddb_mod.MAX_BACKOFF
+        # HTTP-date / junk / missing → caller's backoff
+        for raw in ('Wed, 21 Oct 2015 07:28:00 GMT', 'soon', ''):
+            assert carddb_mod.retry_after_seconds(
+                _Res(503, {'Retry-After': raw}), 2.5) == 2.5
+        assert carddb_mod.retry_after_seconds(_Res(503), 2.5) == 2.5
+
+    def test_is_retryable_status(self):
+        for code in (408, 425, 429, 500, 502, 503, 504, 522, 599):
+            assert carddb_mod.is_retryable_status(code) is True
+        for code in (200, 204, 301, 400, 401, 403, 404, 422):
+            assert carddb_mod.is_retryable_status(code) is False
 
 
 class TestTagCache:

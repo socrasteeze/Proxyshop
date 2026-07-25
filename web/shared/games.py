@@ -22,7 +22,7 @@ from urllib.parse import urljoin
 import requests
 
 # Local Imports
-from web.shared.carddb import HEADERS
+from web.shared.carddb import HEADERS, MAX_BACKOFF, is_retryable_status
 
 POKEMON_API = 'https://api.pokemontcg.io/v2'
 # RiftScribe lacked VEN/promos; Riftcodex is the primary catalog + Riot CDN arts.
@@ -90,14 +90,27 @@ _provider_limiter = RateLimiter(PROVIDER_INTERVAL)
 
 
 def _retry_after_seconds(res: requests.Response, attempt: int) -> float:
-    """Honor Retry-After when present; otherwise exponential backoff."""
+    """Honor Retry-After when present; otherwise exponential backoff.
+
+    Capped at MAX_BACKOFF so a generous (or bogus) Retry-After can't park a
+    download worker for minutes at a time.
+    """
     raw = res.headers.get('Retry-After')
     if raw:
         try:
-            return max(float(raw), 1.0)
+            return min(max(float(raw), 1.0), MAX_BACKOFF)
         except (TypeError, ValueError):
             pass
-    return min(60.0, 1.5 * (2 ** attempt))
+    return min(MAX_BACKOFF, 1.5 * (2 ** attempt))
+
+
+def _status_error(res: requests.Response) -> ProviderError:
+    """Describe a failed response, quoting a little of the body for context."""
+    if res.status_code == 429:
+        return ProviderError('Provider rate limit hit — try again in a minute.')
+    body = (res.text or '')[:200].strip()
+    return ProviderError(
+        f'Provider HTTP {res.status_code}' + (f': {body}' if body else ''))
 
 
 def _read_secret(env_name: str, file_path: str) -> str:
@@ -124,7 +137,13 @@ def _request(
     params: Optional[dict] = None,
     extra_headers: Optional[dict] = None,
 ) -> requests.Response:
-    """Throttled GET with 429 Retry-After backoff."""
+    """Throttled GET, retrying transient failures with bounded backoff.
+
+    Retried: network hiccups, 429 (honoring Retry-After), 408, and 5xx.
+    pokemontcg.io returns sporadic 500/502/504s partway through long catalog
+    runs; they clear on the next attempt, so failing the whole download on the
+    first one is what made those runs look unreliable.
+    """
     headers = dict(HEADERS)
     if extra_headers:
         headers.update(extra_headers)
@@ -154,18 +173,14 @@ def _request(
                 f'{res.headers.get("Location") or "unknown"} — check API host')
         if res.status_code in (401, 403):
             raise ProviderError('Provider rejected the request (check the API key).')
-        if res.status_code == 429:
-            last_err = ProviderError('Provider rate limit hit — backing off.')
+        if is_retryable_status(res.status_code):
+            last_err = _status_error(res)
             if attempt >= PROVIDER_MAX_RETRIES:
-                raise ProviderError(
-                    'Provider rate limit hit — try again in a minute.') from last_err
+                raise last_err
             time.sleep(_retry_after_seconds(res, attempt))
             continue
         if res.status_code >= 400:
-            body = (res.text or '')[:200].strip()
-            raise ProviderError(
-                f'Provider HTTP {res.status_code}'
-                + (f': {body}' if body else ''))
+            raise _status_error(res)
         return res
     if last_err:
         raise last_err

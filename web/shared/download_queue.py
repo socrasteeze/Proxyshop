@@ -111,6 +111,26 @@ def pop_head(runs_dir: Path, game: str, item_id: Optional[str] = None) -> Option
         return removed
 
 
+def rotate_head(runs_dir: Path, game: str, item_id: Optional[str] = None) -> Optional[dict]:
+    """Move the head to the back of the queue so the next item gets a turn.
+
+    Used when the active item keeps failing against a flaky provider: it stays
+    queued and can be retried later, but stops blocking everything behind it.
+    Returns the moved item, or None when there is nothing to rotate past (fewer
+    than two items) or item_id doesn't match the current head.
+    """
+    with _lock:
+        items = load_queue(runs_dir, game)
+        if len(items) < 2:
+            return None
+        if item_id is not None and items[0].get('id') != item_id:
+            return None
+        moved = items.pop(0)
+        items.append(moved)
+        save_queue(runs_dir, game, items)
+        return moved
+
+
 def remove(runs_dir: Path, game: str, item_id: str) -> Optional[dict]:
     """Remove any item by id (head or pending). Returns it, or None."""
     with _lock:

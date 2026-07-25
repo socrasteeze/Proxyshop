@@ -10,6 +10,10 @@
 #   1. GitHub PAT with repo read access:  echo "<token>" > ~/.gh-token
 #      chmod 600 ~/.gh-token
 #   2. First run (from anywhere):         sh nas-update.sh
+#   3. Optional — updates from the web UI (Settings → "Update & restart"):
+#      nohup sh nas-watch.sh >/dev/null 2>&1 &
+#      The app can't run this script itself (it lives inside the container
+#      this rebuilds), so nas-watch.sh runs it on the host. See that file.
 #
 # Test the fetch/install path without docker:  DRY_RUN=1 sh nas-update.sh
 # ============================================================================
@@ -94,6 +98,12 @@ for d in "$TMP/src"/*/; do SRC="$d"; break; done
   echo "ERROR: unexpected tarball layout (no web/server/Dockerfile found)"; exit 1;
 }
 
+# Build identity for the Settings page. GitHub names the tarball's top-level
+# directory "<owner>-<repo>-<short sha>", so the commit comes free.
+BUILD_COMMIT="$(basename "$SRC" | sed 's/.*-//')"
+BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "==> Build $BRANCH@$BUILD_COMMIT ($BUILD_AT)"
+
 # --- install ----------------------------------------------------------------
 echo "==> Installing to $APP_DIR"
 mkdir -p "$APP_DIR"
@@ -150,6 +160,9 @@ docker run -d --name "$APP_NAME" --restart unless-stopped \
   -e PROXYSHOP_OFFLINE=0 \
   -e PROXYSHOP_MAX_UPLOAD_MB=50 \
   -e PROXYSHOP_POKEMONTCG_KEY="$POKEMONTCG_KEY" \
+  -e PROXYSHOP_BUILD_COMMIT="$BUILD_COMMIT" \
+  -e PROXYSHOP_BUILD_BRANCH="$BRANCH" \
+  -e PROXYSHOP_BUILD_AT="$BUILD_AT" \
   -v "$DATA_DIR":/data \
   $VOLUME_ARGS \
   "$APP_NAME:latest"

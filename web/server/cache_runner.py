@@ -7,6 +7,7 @@
 """
 # Standard Library Imports
 import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +160,28 @@ def log_lines(game: str, runs_dir: Path, limit: int = 200) -> list[str]:
 # Queue worker
 # ---------------------------------------------------------------------------
 
+# A flaky provider (5xx, dropped connections) shouldn't strand a queue. Each
+# item gets this many run attempts — it resumes from its checkpoint each time —
+# before it's rotated to the back so the rest of the queue can proceed.
+_ITEM_MAX_ATTEMPTS = 3
+_ITEM_RETRY_BACKOFF = 30.0  # seconds between run attempts for the same item
+
+
+def _sleep_unless_stopped(seconds: float, game: str, runs_dir: Path) -> bool:
+    """Sleep in short slices, returning True if a stop was requested.
+
+    Keeps the Stop button responsive during a between-attempt backoff.
+    """
+    remaining = max(float(seconds), 0.0)
+    while remaining > 0:
+        if stop_path(runs_dir, game).is_file():
+            return True
+        slice_s = min(remaining, 1.0)
+        time.sleep(slice_s)
+        remaining -= slice_s
+    return stop_path(runs_dir, game).is_file()
+
+
 def _snapshot(game: str, progress) -> None:
     _live[game] = {
         'current': progress.current or '',
@@ -172,6 +195,11 @@ def _snapshot(game: str, progress) -> None:
 
 def _worker(game: str, *, db: CardDB, images_dir: Path, runs_dir: Path) -> None:
     """Drain the game's queue one item at a time until empty or stopped."""
+    # Per-item run attempts, and the ids that have used them all up. Bounded so
+    # a provider that is down for everyone can't spin the queue forever: each
+    # item is retried, then rotated once, then the queue pauses.
+    attempts: dict[str, int] = {}
+    exhausted: set[str] = set()
     while True:
         if stop_path(runs_dir, game).is_file():
             break  # queue paused by a stop request
@@ -206,7 +234,39 @@ def _worker(game: str, *, db: CardDB, images_dir: Path, runs_dir: Path) -> None:
                 print_fn=lambda *a, **k: log(game, runs_dir, *a),
                 on_progress=lambda pr: _snapshot(game, pr),
             )
+        except games.ProviderError as e:
+            # Upstream trouble (5xx, exhausted retries, rate limit) — transient
+            # by nature. Retry this item, then let the queue move on without it.
+            iid = str(item.get('id') or '')
+            label = item.get('label') or 'download'
+            n = attempts[iid] = attempts.get(iid, 0) + 1
+            _errors[game] = str(e)
+            _live.pop(game, None)
+            log(game, runs_dir, f'!! provider error: {e}')
+            if n < _ITEM_MAX_ATTEMPTS:
+                log(game, runs_dir,
+                    f'==> retrying {label} in {int(_ITEM_RETRY_BACKOFF)}s '
+                    f'(attempt {n + 1}/{_ITEM_MAX_ATTEMPTS})')
+                if _sleep_unless_stopped(_ITEM_RETRY_BACKOFF, game, runs_dir):
+                    break
+                continue  # head unchanged — resumes from its checkpoint
+            exhausted.add(iid)
+            others = [
+                it for it in download_queue.load_queue(runs_dir, game)
+                if str(it.get('id') or '') not in exhausted]
+            if others and download_queue.rotate_head(runs_dir, game, iid):
+                # The checkpoint is a single per-game slot, so the next item
+                # claims it; this one restarts from page 1 when it comes back
+                # around (already-cached images are skipped, so it's cheap).
+                log(game, runs_dir,
+                    f'==> parking {label} at the back of the queue after '
+                    f'{n} failed attempts; moving on to the next item')
+                reset_checkpoint(runs_dir, game)
+                continue
+            log(game, runs_dir, f'==> queue paused after {n} failed attempts: {e}')
+            break  # leave the item queued; the user can remove/retry it
         except Exception as e:  # noqa: BLE001 — surface in status for UI
+            # Not transient (bad filters, disk, bug) — retrying won't help.
             _errors[game] = str(e)
             log(game, runs_dir, f'==> run crashed: {e}')
             break  # leave the item queued; the user can remove/retry it

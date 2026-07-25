@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Settings — Proxyshop Web{% endblock %}
+{% block content %}
+
+<div class="panel settings-page" id="settings-page">
+  <div class="panel-header">
+    <h2>Settings</h2>
+    <p class="muted" style="margin:0">Server status and deployment.</p>
+  </div>
+
+  <h3>Update</h3>
+  <p class="muted">
+    Pulls the latest <code>main</code> from GitHub, rebuilds the image and
+    restarts the container — the same thing <code>sh nas-update.sh</code> does
+    from the CLI. The web app runs inside the container being replaced, so it
+    hands the job to the host watcher; expect this page to drop offline for a
+    minute or two while the container restarts.
+  </p>
+
+  <p id="update-watcher" class="cache-status">—</p>
+
+  <div class="settings-actions">
+    <button type="button" id="update-run" disabled>
+      Update &amp; restart
+    </button>
+    <span id="update-state" class="muted"></span>
+  </div>
+
+  <pre id="update-log" class="cache-log">No update has been run from here yet.</pre>
+
+  <h3>Build</h3>
+  <dl class="settings-facts">
+    <dt>Commit</dt><dd>{{ version.commit or '—' }}</dd>
+    <dt>Branch</dt><dd>{{ version.branch or '—' }}</dd>
+    <dt>Built</dt><dd>{{ version.built_at or '—' }}</dd>
+    <dt>Data directory</dt><dd><code>{{ data_dir }}</code></dd>
+    <dt>Mode</dt><dd>{{ 'Offline (no live provider calls)' if offline else 'Online' }}</dd>
+  </dl>
+
+  <h3>Cached cards</h3>
+  <dl class="settings-facts">
+    {% for game, count in counts.items() %}
+    <dt>{{ game }}</dt><dd>{{ '{:,}'.format(count) }}</dd>
+    {% else %}
+    <dt>—</dt><dd>Nothing cached yet.</dd>
+    {% endfor %}
+  </dl>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const page = document.getElementById('settings-page');
+  if (!page) return;
+  const btn = document.getElementById('update-run');
+  const stateEl = document.getElementById('update-state');
+  const watcherEl = document.getElementById('update-watcher');
+  const logEl = document.getElementById('update-log');
+  let pollTimer = null;
+  let confirming = false;
+
+  const BUSY = { requested: 'Waiting for the host updater to pick it up…',
+                 running: 'Updating — the server will restart shortly…' };
+
+  function render(body) {
+    const online = !!body.watcher_online;
+    const busy = body.state === 'requested' || body.state === 'running';
+    watcherEl.className = `cache-status is-${online ? 'running' : 'error'}`;
+    watcherEl.textContent = online
+      ? 'Host updater online'
+      : 'Host updater offline — run "sh nas-watch.sh &" on the NAS once, and this button works from then on.';
+
+    btn.disabled = !online || busy;
+    if (!busy && !confirming) btn.textContent = 'Update & restart';
+
+    let msg = BUSY[body.state] || '';
+    if (!busy) {
+      if (body.state === 'ok') msg = `Last update succeeded (${body.finished_at || 'unknown time'}).`;
+      else if (body.state === 'failed') msg = `Last update failed (exit ${body.exit_code}). See the log below.`;
+    }
+    stateEl.textContent = msg;
+
+    const lines = body.log || [];
+    if (lines.length) {
+      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+      logEl.textContent = lines.join('\n');
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Poll only while something is in flight; the restart will drop requests
+    // for a while, which refresh() tolerates.
+    if (busy && !pollTimer) pollTimer = setInterval(refresh, 4000);
+    else if (!busy && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/update');
+      if (!res.ok) return;
+      render(await res.json());
+    } catch (e) {
+      // Expected mid-restart — keep polling rather than showing an error.
+      watcherEl.className = 'cache-status is-idle';
+      watcherEl.textContent = 'Server restarting…';
+    }
+  }
+
+  btn.addEventListener('click', async () => {
+    // Two-step: this stops the container everyone is using.
+    if (!confirming) {
+      confirming = true;
+      btn.textContent = 'Click again to confirm';
+      setTimeout(() => {
+        if (!confirming) return;
+        confirming = false;
+        btn.textContent = 'Update & restart';
+      }, 5000);
+      return;
+    }
+    confirming = false;
+    btn.disabled = true;
+    btn.textContent = 'Update & restart';
+    try {
+      const res = await fetch('/api/update', { method: 'POST' });
+      const body = await res.json();
+      if (!res.ok) {
+        stateEl.textContent = body.detail || 'Could not request an update.';
+        btn.disabled = false;
+        return;
+      }
+      render(body);
+    } catch (e) {
+      stateEl.textContent = 'Could not reach the server.';
+      btn.disabled = false;
+    }
+  });
+
+  refresh();
+});
+</script>
+{% endblock %}

@@ -1410,6 +1410,37 @@ body.logs-body main { flex: 1 1 auto; min-height: 0; padding-bottom: 1rem; displ
 }
 .game-pills .job-chip { margin: 0; }
 
+/* Settings */
+.settings-page h3 {
+  margin: 1.6rem 0 .4rem;
+  font-size: .95rem;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--muted, #8a8f98);
+}
+.settings-page h3:first-of-type { margin-top: 1rem; }
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  flex-wrap: wrap;
+  margin: .6rem 0 .8rem;
+}
+.settings-facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: .3rem 1rem;
+  margin: .4rem 0 0;
+}
+.settings-facts dt { color: var(--muted, #8a8f98); }
+.settings-facts dd { margin: 0; }
+.settings-page .cache-log { max-height: 22rem; }
+
+@media (max-width: 480px) {
+  .settings-facts { grid-template-columns: 1fr; gap: 0 0; }
+  .settings-facts dd { margin: 0 0 .5rem; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;

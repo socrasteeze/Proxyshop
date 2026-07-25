@@ -413,3 +413,94 @@ class TestProviderRetries:
         monkeypatch.setattr(games.requests, 'get', always_drop)
         with pytest.raises(games.ProviderError, match='connection error'):
             games._request('https://api.example/cards')
+
+    @staticmethod
+    def _res(code, headers=None):
+        class Res:
+            status_code = code
+            text = 'upstream boom'
+            def __init__(self):
+                self.headers = dict(headers or {})
+            def json(self):
+                return {'data': []}
+        return Res()
+
+    @pytest.mark.parametrize('code', [500, 502, 503, 504, 408, 429, 522])
+    def test_transient_statuses_are_retried(self, monkeypatch, code):
+        """pokemontcg.io 5xx blips must not fail the run on the first hit."""
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        monkeypatch.setattr(games, 'PROVIDER_MAX_RETRIES', 3)
+        calls = {'n': 0}
+
+        def flaky_get(url, **kwargs):
+            calls['n'] += 1
+            return self._res(code if calls['n'] < 3 else 200,
+                             {'Retry-After': '0'})
+
+        monkeypatch.setattr(games.requests, 'get', flaky_get)
+        assert games._request('https://api.example/cards').status_code == 200
+        assert calls['n'] == 3
+
+    def test_server_error_raises_after_max_retries(self, monkeypatch):
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        monkeypatch.setattr(games, 'PROVIDER_MAX_RETRIES', 2)
+        calls = {'n': 0}
+
+        def always_500(url, **kwargs):
+            calls['n'] += 1
+            return self._res(503)
+
+        monkeypatch.setattr(games.requests, 'get', always_500)
+        with pytest.raises(games.ProviderError, match='Provider HTTP 503'):
+            games._request('https://api.example/cards')
+        assert calls['n'] == 3  # initial attempt + 2 retries
+
+    @pytest.mark.parametrize('code', [400, 404, 422])
+    def test_client_errors_are_not_retried(self, monkeypatch, code):
+        """A bad request won't fix itself — fail fast instead of backing off."""
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        calls = {'n': 0}
+
+        def bad(url, **kwargs):
+            calls['n'] += 1
+            return self._res(code)
+
+        monkeypatch.setattr(games.requests, 'get', bad)
+        with pytest.raises(games.ProviderError, match=f'Provider HTTP {code}'):
+            games._request('https://api.example/cards')
+        assert calls['n'] == 1
+
+    @pytest.mark.parametrize('code', [401, 403])
+    def test_auth_errors_are_not_retried(self, monkeypatch, code):
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        calls = {'n': 0}
+
+        def denied(url, **kwargs):
+            calls['n'] += 1
+            return self._res(code)
+
+        monkeypatch.setattr(games.requests, 'get', denied)
+        with pytest.raises(games.ProviderError, match='check the API key'):
+            games._request('https://api.example/cards')
+        assert calls['n'] == 1
+
+    def test_retry_after_is_capped(self, monkeypatch):
+        """A huge (or bogus) Retry-After can't park the worker for minutes."""
+        from web.shared.carddb import MAX_BACKOFF
+        res = self._res(503, {'Retry-After': '3600'})
+        assert games._retry_after_seconds(res, 0) == MAX_BACKOFF
+        # HTTP-date and junk values fall back to exponential backoff
+        for raw in ('Wed, 21 Oct 2015 07:28:00 GMT', '', 'soon'):
+            delay = games._retry_after_seconds(self._res(503, {'Retry-After': raw}), 1)
+            assert 0 < delay <= MAX_BACKOFF
+        # Exponential backoff is capped too
+        assert games._retry_after_seconds(self._res(503), 99) == MAX_BACKOFF
+
+    def test_rate_limit_message_stays_friendly(self, monkeypatch):
+        monkeypatch.setattr(games.time, 'sleep', lambda *_: None)
+        monkeypatch.setattr(games, 'PROVIDER_MAX_RETRIES', 1)
+        monkeypatch.setattr(
+            games.requests, 'get',
+            lambda url, **kw: self._res(429, {'Retry-After': '0'}))
+        with pytest.raises(games.ProviderError, match='rate limit'):
+            games._request('https://api.example/cards')

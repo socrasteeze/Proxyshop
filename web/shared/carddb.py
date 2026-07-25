@@ -8,7 +8,7 @@
 Scryfall API etiquette implemented here (https://scryfall.com/docs/api):
     - Identifying User-Agent and Accept headers on every request.
     - Minimum 100ms between requests (their guidance is max ~10 req/sec).
-    - Honor HTTP 429 Retry-After with bounded retries and backoff.
+    - Honor HTTP 429 Retry-After, and retry 5xx/408, with bounded backoff.
     - Prefer nightly bulk-data files over per-card API scraping.
 """
 # Standard Library Imports
@@ -90,6 +90,33 @@ COLLECTION_CHUNK = 75
 
 # Bounded retries for 429 / transient failures.
 MAX_RETRIES = 3
+
+# Never sleep longer than this for a single backoff, however generous the
+# provider's Retry-After header is — a wedged worker is worse than a retry.
+MAX_BACKOFF = 60.0
+
+# Statuses worth another attempt beyond the 5xx family: rate limits, server-side
+# request timeouts, and 'too early'. Card providers (pokemontcg.io especially)
+# return sporadic 500/502/504s under load that clear on the next try, so
+# treating them as fatal turns a momentary blip into a failed download run.
+RETRYABLE_STATUS = frozenset({408, 425, 429})
+
+
+def is_retryable_status(code: int) -> bool:
+    """True when an HTTP status is transient and worth retrying with backoff."""
+    return code in RETRYABLE_STATUS or code >= 500
+
+
+def retry_after_seconds(res, fallback: float) -> float:
+    """Honor a numeric Retry-After header, else use the caller's backoff.
+
+    Bounded by MAX_BACKOFF; HTTP-date and junk values fall back silently.
+    """
+    try:
+        delay = float(res.headers.get('Retry-After', 0) or 0)
+    except (TypeError, ValueError):
+        delay = 0.0
+    return min(max(delay, fallback), MAX_BACKOFF)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -206,8 +233,14 @@ class ScryfallSession:
             self._last_request = time.monotonic()
 
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Perform a throttled request, retrying 429s and transient network
-        errors (timeouts, dropped connections) with bounded backoff."""
+        """Perform a throttled request, retrying transient failures with
+        bounded backoff.
+
+        Retried: network hiccups (timeouts, dropped connections) and transient
+        statuses (429, 408, and the 5xx family — see is_retryable_status). A
+        5xx from an image CDN is a blip, not a missing image, so retrying here
+        keeps it from being recorded as a permanent per-card failure.
+        """
         kwargs.setdefault('timeout', 30)
         for attempt in range(MAX_RETRIES + 1):
             self._throttle()
@@ -221,16 +254,16 @@ class ScryfallSession:
                     raise
                 time.sleep(min(30.0, 0.5 * (2 ** attempt)))
                 continue
-            if res.status_code != 429:
+            if not is_retryable_status(res.status_code):
                 return res
             if attempt == MAX_RETRIES:
                 return res
-            # Honor Retry-After, fall back to exponential backoff
-            try:
-                delay = float(res.headers.get('Retry-After', 0))
-            except (TypeError, ValueError):
-                delay = 0
-            time.sleep(max(delay, 0.5 * (2 ** attempt)))
+            # Honor Retry-After, fall back to exponential backoff. Release the
+            # discarded response first: with stream=True its connection stays
+            # checked out of the pool until closed.
+            delay = retry_after_seconds(res, 0.5 * (2 ** attempt))
+            res.close()
+            time.sleep(delay)
         return res
 
     def get(self, url: str, **kwargs) -> requests.Response:

@@ -50,8 +50,28 @@ class TestQueue:
         assert removed == 2
         assert [i['label'] for i in dq.load_queue(tmp_path, 'mtg')] == ['Set MH3']
 
+    def test_rotate_head(self, tmp_path):
+        a = dq.enqueue(tmp_path, 'mtg', {'set': 'mh3'})
+        dq.enqueue(tmp_path, 'mtg', {'set': 'war'})
+        dq.enqueue(tmp_path, 'mtg', {'set': 'dom'})
+        assert dq.rotate_head(tmp_path, 'mtg', a['id'])['id'] == a['id']
+        assert [i['label'] for i in dq.load_queue(tmp_path, 'mtg')] == [
+            'Set WAR', 'Set DOM', 'Set MH3']
+
+    def test_rotate_head_guarded(self, tmp_path):
+        a = dq.enqueue(tmp_path, 'mtg', {'set': 'mh3'})
+        dq.enqueue(tmp_path, 'mtg', {'set': 'war'})
+        # Wrong id is a no-op, and so is a queue with nothing to rotate past.
+        assert dq.rotate_head(tmp_path, 'mtg', 'nope') is None
+        assert [i['label'] for i in dq.load_queue(tmp_path, 'mtg')] == [
+            'Set MH3', 'Set WAR']
+        dq.remove(tmp_path, 'mtg', a['id'])
+        assert dq.rotate_head(tmp_path, 'mtg') is None
+        assert len(dq.load_queue(tmp_path, 'mtg')) == 1
+
     def test_empty_and_missing(self, tmp_path):
         assert dq.load_queue(tmp_path, 'mtg') == []
         assert dq.head(tmp_path, 'mtg') is None
         assert dq.pop_head(tmp_path, 'mtg') is None
+        assert dq.rotate_head(tmp_path, 'mtg') is None
         assert dq.clear_pending(tmp_path, 'mtg') == 0
