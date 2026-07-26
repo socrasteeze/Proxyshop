@@ -11,7 +11,7 @@
 #      chmod 600 ~/.gh-token
 #   2. First run (from anywhere):         sh nas-update.sh
 #   3. Optional — updates from the web UI (Settings → "Update & restart"):
-#      nohup sh nas-watch.sh >/dev/null 2>&1 &
+#      nohup sh "$HOME/proxyshop-web/nas-watch.sh" >/dev/null 2>&1 &
 #      The app can't run this script itself (it lives inside the container
 #      this rebuilds), so nas-watch.sh runs it on the host. See that file.
 #

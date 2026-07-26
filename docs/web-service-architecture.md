@@ -334,7 +334,7 @@ doubles as a keep-alive across reboots and crashes. Install the entry with
 paste into a shell — a shell would just report `*/5: command not found`):
 
 ```
-(crontab -l 2>/dev/null; echo '*/5 * * * * nohup sh /home/<you>/nas-watch.sh >/dev/null 2>&1 &') | crontab -
+(crontab -l 2>/dev/null; echo '*/5 * * * * nohup sh /home/<you>/proxyshop-web/nas-watch.sh >/dev/null 2>&1 &') | crontab -
 ```
 
 The watcher heartbeats every 15s. Settings shows "Host updater offline" and
@@ -345,6 +345,11 @@ and the deployed commit is shown under **Build**.
 Notes:
 - Match `DATA_DIR` in `nas-watch.sh` to the one in `nas-update.sh`; it is the
   host path mounted at `/data`.
+- The watcher finds `nas-update.sh` beside itself, then in `~/proxyshop-web`,
+  then in `$HOME` — so the copy installed by the last deploy is the one that
+  runs. If yours lives somewhere else, start the watcher with
+  `UPDATE_SCRIPT=/path/to/nas-update.sh`. "Update script not found" in the
+  Settings log lists every path it tried.
 - Verify the wiring without deploying:
   `DATA_DIR=/Volume1/proxyshop/data ONE_SHOT=1 sh nas-watch.sh`
 - The script deploys from the branch named in its config block (`main` by
