@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         help='Cache cards (+ HQ images) with stop/resume; MTG/Pokémon need filters')
     p_cache.add_argument(
         '--game', required=True, choices=list(games.CATALOG_GAMES),
-        help='mtg/pokemon require filters; riftbound/union-arena can mirror all')
+        help='mtg/pokemon require filters; the small TCGs can mirror all')
     p_cache.add_argument('--stop', action='store_true')
     p_cache.add_argument('--status', action='store_true')
     p_cache.add_argument('--reset', action='store_true')

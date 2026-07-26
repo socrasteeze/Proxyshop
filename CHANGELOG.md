@@ -14,7 +14,10 @@ Desktop Proxyshop release history continues below.
 - **Offline cache UI**: Download/Resume/Stop header, inline logs, job chips,
   Logs page, nav badge; APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
 - **Selective cache**: MTG/Pokémon filters; Riftbound via Riftcodex; Union Arena
-  via official cardlists
+  and Weiß Schwarz via official cardlists
+- **Weiß Schwarz**: EN + JP cardlist provider with a DeckLog → official →
+  Yuyutei → EncoreDecks image chain (search/image only; no print-grade source
+  exists for this game)
 - **Search / Decks / Sheets**: multi-game browse, deck import, HQ ZIP, PDF sheets
 
 ### Docs

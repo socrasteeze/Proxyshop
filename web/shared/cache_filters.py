@@ -12,7 +12,7 @@ from typing import Any, Optional
 SELECTIVE_GAMES = frozenset({'mtg', 'pokemon'})
 
 # Games that support cache-game (selective or full small catalogs)
-CACHEABLE_GAMES = ('mtg', 'pokemon', 'riftbound', 'union-arena')
+CACHEABLE_GAMES = ('mtg', 'pokemon', 'riftbound', 'union-arena', 'weiss-schwarz')
 
 # Scryfall `is:` art / printing flags exposed in the UI
 MTG_ART_FLAGS = (

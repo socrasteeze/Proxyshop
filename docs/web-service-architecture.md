@@ -89,18 +89,31 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   key in `PROXYSHOP_POKEMONTCG_KEY` raises rate limits), **Union Arena**
   ([official NA + JP cardlists](https://www.unionarena-tcg.com/na/cardlist/) —
   no key; English and Japanese printings; card images are Bandai 600×837 PNGs),
-  and
   **Riftbound** ([Riftcodex](https://riftcodex.com/) — public REST API, no key;
   official Riot 744×1039 arts; DotGG supplies Chinese Arcane Box promos; official
-  JA/KO gallery names enrich search). Note: JP/CN *language card faces* are not
-  separately published — EN/JA share the same art URLs.
+  JA/KO gallery names enrich search), and
+  **Weiß Schwarz** ([official EN + JP cardlists](https://en.ws-tcg.com/cardlist/)
+  — no key; English and Japanese printings). Note: JP/CN *language card faces*
+  are not separately published for Riftbound — EN/JA share the same art URLs.
   Everything found online is cached locally, so the
   browser works offline for anything you've seen before. Photoshop rendering
   supports **MTG** (and **Pokémon** when PSDs are installed on the Windows
   worker). **Pokémon** and **Riftbound** also support **Compose** mode — a
   pokecardmaker-style Pillow renderer that runs on the NAS with no Photoshop
   (procedural frames, or drop blank PNGs into `web/shared/compose/frames/`).
-  Union Arena remains search/image only.
+  Union Arena and Weiß Schwarz remain search/image only.
+
+  **Weiß Schwarz image quality caveat.** There is no Scryfall equivalent for
+  this game — no source publishes print-grade scans. Card codes map onto the
+  official art path (`CCS/WX01-001` → `/cardlist/cardimages/CCS_WX01_001.png`),
+  and `_ws_best_image()` walks **DeckLog → official cardlist → Yuyutei →
+  EncoreDecks**, taking the first hit. The first two tiers are free (an
+  in-memory DeckLog index plus a constructed URL), so the probing tiers only
+  run for cards the official site has no art for. Expect web-display
+  resolution, well under the 745×1040 a 300 DPI proxy wants; print sheets will
+  look soft until an upscaling pass exists. Art here is licensed from many
+  separate anime rights holders on top of Bushiroad's own — a wider rights
+  surface than the other games in this repo.
 - **Full TCG cache (NAS)**: small games can be mirrored into the local DB +
   `/data/images/` with stop/resume:
 
@@ -124,7 +137,8 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   parallel, so you can stack several MTG filters/tags and let them run in
   sequence. **MTG** and **Pokémon** require filters (set, type, rarity,
   art/frame flags, tags, regulation, …) so the cache does not pull an entire
-  game; Riftbound/Union Arena can still mirror their full catalogs. Examples:
+  game; Riftbound/Union Arena/Weiß Schwarz can still mirror their full
+  catalogs. Examples:
 
   ```bash
   docker exec -it proxyshop-web python -m web.server.manage cache-game \
@@ -286,7 +300,7 @@ file alone does not update a running container.
 
 ```sh
 # Optional — raises pokemontcg.io rate limits (free key from https://dev.pokemontcg.io):
-# Union Arena (official cardlist) and Riftbound (Riftcodex) need no key.
+# Union Arena, Weiß Schwarz (official cardlists) and Riftbound (Riftcodex) need no key.
 echo 'YOUR_POKEMONTCG_KEY' > ~/.proxyshop-pokemontcg-key
 chmod 600 ~/.proxyshop-pokemontcg-key
 # Required: restart the container with the key

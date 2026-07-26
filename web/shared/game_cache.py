@@ -255,6 +255,13 @@ def _fetch_catalog_page(
         # page indexes product series; total is series count
         has_more = total is not None and progress.page < total
         return cards, total, has_more
+    if game == 'weiss-schwarz':
+        cards, total = games.list_weiss_schwarz_page(
+            page=progress.page,
+            limit=progress.page_size)
+        # page indexes official titles; total is title count
+        has_more = total is not None and progress.page < total
+        return cards, total, has_more
     if game == 'mtg':
         return db.list_scryfall_page(progress.query, page=progress.page, store=False)
     if game == 'pokemon':
@@ -352,7 +359,7 @@ def run_cache_game(
     """Cache a TCG catalog (+ images) with stop/resume support.
 
     MTG and Pokémon require selective filters (set/type/rarity/…). Small TCGs
-    (Riftbound/Union Arena) may run unfiltered full-catalog mirrors.
+    (Riftbound/Union Arena/Weiß Schwarz) may run unfiltered full-catalog mirrors.
     """
     game = (game or '').strip().lower()
     if game not in CACHEABLE_GAMES and game not in games.CATALOG_GAMES:
@@ -376,7 +383,7 @@ def run_cache_game(
                 f'{game} cache needs filters (set, type, rarity, art, …) '
                 'so it does not dump the entire catalog')
         query = build_provider_query(game, norm_filters)
-    elif not images_only and game in ('riftbound', 'union-arena'):
+    elif not images_only and game in ('riftbound', 'union-arena', 'weiss-schwarz'):
         query = norm_filters.get('q') or ''
 
     runs_dir.mkdir(parents=True, exist_ok=True)

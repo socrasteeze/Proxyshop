@@ -82,6 +82,69 @@ def _ua_fake_fetch(url, params=None):
     return UA_SERIES_HTML
 
 
+WS_SEARCH_HTML = '''
+<ul class="cardlist">
+  <li>
+    <a href="/cardlist/?cardno=CCS/WX01-001">
+      <img src="/cardlist/cardimages/CCS_WX01_001.png?v=2"
+           alt="CCS/WX01-001 Sakura">
+    </a>
+  </li>
+  <li>
+    <a href="/cardlist/?cardno=CCS/WX01-002">
+      <img src="/cardlist/cardimages/CCS_WX01_002.png"
+           alt="CCS/WX01-002">
+      <p class="card_name">Tomoyo</p>
+    </a>
+  </li>
+</ul>
+'''
+
+WS_JP_SEARCH_HTML = '''
+<ul class="cardlist">
+  <li>
+    <a href="/cardlist/?cardno=KC/S25-001">
+      <img src="/cardlist/cardimages/KC_S25_001.png"
+           alt="KC/S25-001 島風">
+    </a>
+  </li>
+</ul>
+'''
+
+WS_TITLE_HTML = '''
+<select name="title_number" id="title_number">
+  <option value="">Select Title</option>
+  <option value="WX01">Cardcaptor Sakura : Clear Card</option>
+  <option value="WX02">Fate/Grand Order</option>
+</select>
+'''
+
+WS_JP_TITLE_HTML = '''
+<select name="title_number" id="title_number">
+  <option value="">タイトルを選択</option>
+  <option value="S25">艦隊これくしょん -艦これ-</option>
+</select>
+'''
+
+
+def _ws_fake_fetch(url, params=None):
+    """Stub cardlist HTML: EN vs JP by origin, search vs title by params."""
+    params = params or {}
+    japanese = '//ws-tcg.com' in url
+    if params.get('cmd') == 'search':
+        return WS_JP_SEARCH_HTML if japanese else WS_SEARCH_HTML
+    return WS_JP_TITLE_HTML if japanese else WS_TITLE_HTML
+
+
+@pytest.fixture
+def ws_offline(monkeypatch):
+    """Stub every Weiß Schwarz network path (cardlist, DeckLog, probes)."""
+    monkeypatch.setattr(games, '_ws_fetch_html', _ws_fake_fetch)
+    monkeypatch.setattr(games, '_ws_title_cache', None)
+    monkeypatch.setattr(games, '_ws_decklog_index', lambda locale='en', force=False: {})
+    monkeypatch.setattr(games, '_ws_url_exists', lambda url: False)
+
+
 class TestNormalization:
 
     def test_pokemon_normalization(self, monkeypatch):
@@ -173,6 +236,101 @@ class TestNormalization:
         assert jp_cards[0]['lang'] == 'ja'
         assert jp_cards[0]['id'].startswith('ua-ja-')
         empty, total3 = games.list_union_arena_page(page=4)
+        assert empty == []
+        assert total3 == 3
+
+    def test_ws_image_url(self):
+        assert games._ws_image_url('CCS/WX01-001') == (
+            'https://en.ws-tcg.com/cardlist/cardimages/CCS_WX01_001.png')
+        assert games._ws_image_url('KC/S25-001', locale='ja') == (
+            'https://ws-tcg.com/cardlist/cardimages/KC_S25_001.png')
+
+    def test_ws_code_filename_round_trip(self):
+        for code in ('CCS/WX01-001', 'KC/S25-001', 'FGO/S75-E001'):
+            assert games._ws_code_from_filename(
+                games._ws_image_filename(code)) == code
+
+    def test_parse_ws_cardlist_html(self):
+        rows = games._parse_ws_cardlist_html(WS_SEARCH_HTML, locale='en')
+        assert len(rows) == 2
+        assert rows[0]['code'] == 'CCS/WX01-001'
+        assert rows[0]['name'] == 'Sakura'
+        assert rows[0]['image'].endswith('/cardlist/cardimages/CCS_WX01_001.png')
+        # Second card's alt is bare code only — name comes from the nearby cell
+        assert rows[1]['name'] == 'Tomoyo'
+
+    def test_parse_ws_jp_cardlist_html(self):
+        (row,) = games._parse_ws_cardlist_html(WS_JP_SEARCH_HTML, locale='ja')
+        assert row['code'] == 'KC/S25-001'
+        assert row['image'].startswith('https://ws-tcg.com/')
+        assert '島風' in row['name']
+
+    def test_weiss_schwarz_empty_query(self):
+        assert games.search_weiss_schwarz('a') == []
+
+    def test_weiss_schwarz_normalization(self, ws_offline):
+        (card,) = games.search_weiss_schwarz('Sakura', limit=1)
+        assert card['id'] == 'ws-CCS-WX01-001'
+        assert card['game'] == 'weiss-schwarz'
+        assert card['lang'] == 'en'
+        assert card['name'] == 'Sakura'
+        assert card['collector_number'] == 'WX01-001'
+        assert card['set'] == 'CCS'
+        assert card['images']['large'].endswith('/cardimages/CCS_WX01_001.png')
+        assert card['images']['small'] == card['images']['large']
+        assert images.image_uri(card, 'large') == card['images']['large']
+
+    def test_weiss_schwarz_includes_japanese(self, ws_offline):
+        cards = games.search_weiss_schwarz('Sakura', limit=10)
+        langs = {c['lang'] for c in cards}
+        assert 'en' in langs
+        assert 'ja' in langs
+        ja = next(c for c in cards if c['lang'] == 'ja')
+        assert ja['id'].startswith('ws-ja-')
+        assert ja['images']['large'].startswith('https://ws-tcg.com/')
+
+    def test_ws_locale_ids_never_collide(self):
+        assert games._ws_card_id('CCS/WX01-001', 'en') != (
+            games._ws_card_id('CCS/WX01-001', 'ja'))
+
+    def test_ws_best_image_prefers_decklog(self, monkeypatch):
+        monkeypatch.setattr(
+            games, '_ws_decklog_index',
+            lambda locale='en', force=False: {
+                'CCS/WX01-001': 'https://decklog.example/CCS_WX01_001.png'})
+        assert games._ws_best_image('CCS/WX01-001', 'en', 'https://en.ws-tcg.com/x.png') == (
+            'https://decklog.example/CCS_WX01_001.png')
+
+    def test_ws_best_image_falls_back_to_encoredecks(self, monkeypatch):
+        monkeypatch.setattr(games, '_ws_decklog_index', lambda locale='en', force=False: {})
+        monkeypatch.setattr(games, '_ws_url_exists', lambda url: False)
+        monkeypatch.setattr(
+            games, '_ws_encoredecks_image',
+            lambda code: 'https://www.encoredecks.com/images/ccs.png')
+        assert games._ws_best_image('CCS/WX01-001', 'en') == (
+            'https://www.encoredecks.com/images/ccs.png')
+
+    def test_ws_decklog_failure_degrades(self, monkeypatch):
+        """A dead DeckLog must not fail the card — fall through to official."""
+        def _boom(url, params, extra_headers=None):
+            raise games.ProviderError('decklog down')
+        monkeypatch.setattr(games, '_get', _boom)
+        monkeypatch.setattr(games, '_ws_decklog_cache', {})
+        assert games._ws_decklog_index('en', force=True) == {}
+
+    def test_list_weiss_schwarz_page(self, ws_offline):
+        cards, total = games.list_weiss_schwarz_page(page=1)
+        # 2 EN titles + 1 JP title
+        assert total == 3
+        assert len(cards) == 2
+        assert cards[0]['lang'] == 'en'
+        assert cards[0]['set_name'] == 'Cardcaptor Sakura : Clear Card'
+        jp_cards, total2 = games.list_weiss_schwarz_page(page=3)
+        assert total2 == 3
+        assert len(jp_cards) == 1
+        assert jp_cards[0]['lang'] == 'ja'
+        assert jp_cards[0]['id'].startswith('ws-ja-')
+        empty, total3 = games.list_weiss_schwarz_page(page=4)
         assert empty == []
         assert total3 == 3
 

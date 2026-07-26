@@ -31,7 +31,7 @@ a Windows worker.
 
 _(`/search` is retired and redirects to the Card library.)_
 
-**Supported games (web):** MTG, Pokémon, Union Arena, Riftbound. Photoshop
+**Supported games (web):** MTG, Pokémon, Union Arena, Riftbound, Weiß Schwarz. Photoshop
 rendering covers MTG (and Pokémon when PSDs are installed). **Compose** works
 for MTG / Pokémon / Riftbound without Windows.
 

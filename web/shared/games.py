@@ -3,9 +3,10 @@
 * Search providers for non-MTG trading card games, normalized into the same
 * card shape the local database stores. MTG stays on the Scryfall path in
 * carddb; these providers cover:
-*   - pokemon      -> pokemontcg.io (free; optional API key raises limits)
-*   - union-arena  -> unionarena-tcg.com NA+JP cardlists (public; no API key)
-*   - riftbound    -> riftcodex.com (+ DotGG ARC; official JA/KO names)
+*   - pokemon        -> pokemontcg.io (free; optional API key raises limits)
+*   - union-arena    -> unionarena-tcg.com NA+JP cardlists (public; no API key)
+*   - riftbound      -> riftcodex.com (+ DotGG ARC; official JA/KO names)
+*   - weiss-schwarz  -> ws-tcg.com EN+JP cardlists (+ DeckLog/YYT/EncoreDecks art)
 * Must never import from `src/`.
 """
 # Standard Library Imports
@@ -36,6 +37,24 @@ UA_LOCALES = {
     'ja': {'path': 'jp', 'lang': 'ja'},
 }
 UA_LOCALE_ORDER = ('en', 'ja')
+# Weiß Schwarz official cardlists, each paired with its DeckLog deck-builder
+# host (the preferred image source — see _ws_best_image).
+WS_LOCALES = {
+    'en': {
+        'origin': 'https://en.ws-tcg.com',
+        'lang': 'en',
+        'decklog': 'https://decklog-en.bushiroad.com',
+    },
+    'ja': {
+        'origin': 'https://ws-tcg.com',
+        'lang': 'ja',
+        'decklog': 'https://decklog.bushiroad.com',
+    },
+}
+WS_LOCALE_ORDER = ('en', 'ja')
+YYT_IMAGE_BASE = 'https://img.yuyu-tei.jp/card_image/ws/front'
+ENCOREDECKS_API = 'https://www.encoredecks.com/api'
+ENCOREDECKS_API_IMAGES = 'https://www.encoredecks.com/images'
 
 # Optional in-container secret files (mounted by nas-update.sh)
 _POKEMONTCG_KEY_FILE = os.environ.get(
@@ -47,13 +66,14 @@ PROVIDER_INTERVAL = float(os.environ.get('PROXYSHOP_PROVIDER_INTERVAL', '0.25'))
 PROVIDER_MAX_RETRIES = int(os.environ.get('PROXYSHOP_PROVIDER_MAX_RETRIES', '5'))
 
 # Games supported by the search/image layer ('mtg' is handled by carddb)
-GAMES = ('mtg', 'pokemon', 'union-arena', 'riftbound')
+GAMES = ('mtg', 'pokemon', 'union-arena', 'riftbound', 'weiss-schwarz')
 
 GAME_LABELS = {
     'mtg': 'Magic: The Gathering',
     'pokemon': 'Pokémon',
     'union-arena': 'Union Arena',
     'riftbound': 'Riftbound',
+    'weiss-schwarz': 'Weiß Schwarz',
 }
 
 
@@ -1078,12 +1098,379 @@ def list_riftbound_locale_page(
     return cards, total
 
 
+"""
+* Weiß Schwarz (official EN + JP cardlists; DeckLog/YYT/EncoreDecks image fallbacks)
+"""
+
+# Card codes look like CCS/WX01-001; the official image filename swaps the
+# separators for underscores (CCS_WX01_001.png), which inverts cleanly.
+_WS_IMAGE_RE = re.compile(
+    r'<img\b[^>]*?\b(?:data-src|src)="([^"]*?/cardimages/([^"/?]+)\.png[^"]*)"[^>]*?>',
+    re.IGNORECASE,
+)
+_WS_ALT_RE = re.compile(r'\balt="([^"]*)"', re.IGNORECASE)
+_WS_TITLE_ATTR_RE = re.compile(r'\btitle="([^"]*)"', re.IGNORECASE)
+# Name text that follows the thumbnail when the <img> carries no usable alt.
+_WS_NAME_NEAR_RE = re.compile(
+    r'<(?:h\d|span|p|div|td)\b[^>]*class="[^"]*(?:card[_-]?name|name)[^"]*"[^>]*>'
+    r'\s*([^<]+?)\s*<',
+    re.IGNORECASE,
+)
+_WS_TITLE_OPTION_RE = re.compile(
+    r'<option\b[^>]*\bvalue="([^"]+)"[^>]*>([^<]*)</option>',
+    re.IGNORECASE,
+)
+
+# Cached as list of (locale, title_id, label)
+_ws_title_cache: Optional[list[tuple[str, str, str]]] = None
+_ws_title_lock = threading.Lock()
+# locale -> {card code: image url} built once from DeckLog
+_ws_decklog_cache: dict[str, dict[str, str]] = {}
+_ws_decklog_lock = threading.Lock()
+
+
+def _ws_locale_meta(locale: str) -> dict:
+    return WS_LOCALES.get(locale) or WS_LOCALES['en']
+
+
+def _ws_origin(locale: str = 'en') -> str:
+    return _ws_locale_meta(locale)['origin']
+
+
+def _ws_cardlist(locale: str = 'en') -> str:
+    return f'{_ws_origin(locale)}/cardlist'
+
+
+def _ws_images_base(locale: str = 'en') -> str:
+    return f'{_ws_cardlist(locale)}/cardimages'
+
+
+def _ws_image_filename(code: str) -> str:
+    """CCS/WX01-001 -> CCS_WX01_001.png (official cardimages naming)."""
+    return str(code or '').replace('/', '_').replace('-', '_') + '.png'
+
+
+def _ws_code_from_filename(filename: str) -> str:
+    """Invert _ws_image_filename: CCS_WX01_001 -> CCS/WX01-001."""
+    stem = re.sub(r'\.png$', '', str(filename or ''), flags=re.IGNORECASE)
+    if '_' not in stem:
+        return stem
+    publisher, rest = stem.split('_', 1)
+    return f"{publisher}/{rest.replace('_', '-')}"
+
+
+def _ws_image_url(code: str, locale: str = 'en') -> str:
+    """Build the official cardlist PNG URL from a card code."""
+    return f'{_ws_images_base(locale)}/{_ws_image_filename(code)}'
+
+
+def _ws_absolute_image(src: str, code: str = '', *, locale: str = 'en') -> str:
+    """Resolve a cardlist image src to an absolute URL (drop cache-buster query)."""
+    raw = (src or '').strip()
+    if raw:
+        if raw.startswith('http://') or raw.startswith('https://'):
+            return raw.split('?', 1)[0]
+        return urljoin(f'{_ws_origin(locale)}/', raw.lstrip('/')).split('?', 1)[0]
+    return _ws_image_url(code, locale=locale) if code else ''
+
+
+def _ws_name_from_alt(alt: str, code: str) -> str:
+    """Strip a leading card code off the alt text, leaving the card name."""
+    text = html_lib.unescape(alt or '').strip()
+    if code and text.startswith(code):
+        return text[len(code):].strip(' 　-–—:：') or ''
+    # Some pages use the underscored filename form as the alt prefix instead
+    stem = _ws_image_filename(code)[:-4] if code else ''
+    if stem and text.startswith(stem):
+        return text[len(stem):].strip(' 　-–—:：') or ''
+    return text
+
+
+def _ws_card_id(code: str, locale: str = 'en') -> str:
+    """Stable id; JP gets a lang prefix so it never collides with EN."""
+    safe = _safe_id(code)
+    return f'ws-ja-{safe}' if locale == 'ja' else f'ws-{safe}'
+
+
+def _parse_ws_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]:
+    """Extract card rows from official cardlist search/title HTML.
+
+    Anchored on the ``cardimages/*.png`` thumbnails rather than on the
+    surrounding markup: the card code is recoverable from the filename alone,
+    so a layout change on the official site can't silently drop every card.
+    """
+    html_text = page_html or ''
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for match in _WS_IMAGE_RE.finditer(html_text):
+        code = _ws_code_from_filename(html_lib.unescape(match.group(2)))
+        if not code or code in seen:
+            continue
+        tag = match.group(0)
+        alt_match = _WS_ALT_RE.search(tag) or _WS_TITLE_ATTR_RE.search(tag)
+        name = _ws_name_from_alt(alt_match.group(1) if alt_match else '', code)
+        if not name:
+            # Fall back to the labelled name cell that follows the thumbnail
+            near = _WS_NAME_NEAR_RE.search(html_text, match.end(), match.end() + 800)
+            if near:
+                name = html_lib.unescape(near.group(1)).strip()
+        if not name:
+            continue
+        seen.add(code)
+        rows.append({
+            'code': code,
+            'name': name,
+            'set_name': code.split('/', 1)[0] if '/' in code else '',
+            'image': _ws_absolute_image(
+                html_lib.unescape(match.group(1)), code, locale=locale),
+            'locale': locale,
+        })
+    return rows
+
+
+def _parse_ws_titles(page_html: str) -> list[tuple[str, str]]:
+    """Parse title (series) options from the cardlist filter form."""
+    titles: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _WS_TITLE_OPTION_RE.finditer(page_html or ''):
+        title_id = match.group(1).strip()
+        label = html_lib.unescape(match.group(2)).strip()
+        if not title_id or title_id in seen:
+            continue
+        seen.add(title_id)
+        titles.append((title_id, label))
+    return titles
+
+
+def _ws_fetch_html(url: str, params: Optional[dict] = None) -> str:
+    res = _request(url, params=params)
+    return res.text or ''
+
+
+def _ws_title_list(*, force: bool = False) -> list[tuple[str, str, str]]:
+    """Return (locale, title_id, label) for the EN then JP title dropdowns."""
+    global _ws_title_cache
+    with _ws_title_lock:
+        if _ws_title_cache is not None and not force:
+            return list(_ws_title_cache)
+    combined: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for locale in WS_LOCALE_ORDER:
+        try:
+            page_html = _ws_fetch_html(f'{_ws_cardlist(locale)}/')
+            for title_id, label in _parse_ws_titles(page_html):
+                combined.append((locale, title_id, label))
+        except ProviderError as e:
+            errors.append(f'{locale}: {e}')
+    if not combined:
+        detail = '; '.join(errors) if errors else 'empty responses'
+        raise ProviderError(f'Weiß Schwarz cardlist returned no titles ({detail})')
+    with _ws_title_lock:
+        _ws_title_cache = combined
+        return list(combined)
+
+
+def _ws_decklog_index(locale: str = 'en', *, force: bool = False) -> dict[str, str]:
+    """Map card code -> DeckLog image URL, built once per locale.
+
+    DeckLog is preferred over the official cardlist when it has the card, but it
+    is a deck builder rather than a catalog API — if the shape changes or the
+    call fails, the index comes back empty and _ws_best_image simply falls
+    through to the official image. Never raises.
+    """
+    with _ws_decklog_lock:
+        cached = _ws_decklog_cache.get(locale)
+        if cached is not None and not force:
+            return cached
+    index: dict[str, str] = {}
+    origin = _ws_locale_meta(locale)['decklog']
+    try:
+        payload = _get(f'{origin}/system/app/api/cardlist', params={})
+        for row in _card_rows(payload):
+            code = str(row.get('card_no') or row.get('cardNo') or '').strip()
+            src = str(row.get('img') or row.get('image') or '').strip()
+            if code and src:
+                index[code] = _ws_absolute_image(src, code, locale=locale)
+    except ProviderError:
+        index = {}
+    with _ws_decklog_lock:
+        _ws_decklog_cache[locale] = index
+        return index
+
+
+def _ws_yuyutei_image(code: str) -> str:
+    """Retailer scan URL for a card code (yuyu-tei drops the publisher prefix)."""
+    stem = code.split('/', 1)[1] if '/' in code else code
+    return f'{YYT_IMAGE_BASE}/{_safe_id(stem)}.jpg' if stem else ''
+
+
+def _ws_encoredecks_image(code: str) -> str:
+    """Last-resort image lookup through the community EncoreDecks API."""
+    if not code:
+        return ''
+    try:
+        payload = _get(f'{ENCOREDECKS_API}/cards', params={'cardcode': code})
+    except ProviderError:
+        return ''
+    for row in _card_rows(payload):
+        src = str(row.get('image') or row.get('imagepath') or '').strip()
+        if src:
+            return src if src.startswith('http') else f'{ENCOREDECKS_API_IMAGES}/{src}'
+    return ''
+
+
+def _ws_url_exists(url: str) -> bool:
+    """Cheap availability probe for the fallback image tiers."""
+    if not url:
+        return False
+    _provider_limiter.wait()
+    try:
+        res = requests.head(url, headers=HEADERS, timeout=15, allow_redirects=True)
+    except requests.RequestException:
+        return False
+    return res.status_code == 200
+
+
+def _ws_best_image(code: str, locale: str = 'en', scraped: str = '') -> str:
+    """Resolve the best available image URL for a card code.
+
+    Order: DeckLog -> official cardlist -> Yuyutei -> EncoreDecks. The first two
+    tiers are free (an in-memory index and a constructed URL), so the probing
+    tiers only run for cards the official site has no art for.
+    """
+    from_decklog = _ws_decklog_index(locale).get(code)
+    if from_decklog:
+        return from_decklog
+    official = scraped or _ws_image_url(code, locale=locale)
+    if scraped or _ws_url_exists(official):
+        return official
+    yuyutei = _ws_yuyutei_image(code)
+    if _ws_url_exists(yuyutei):
+        return yuyutei
+    return _ws_encoredecks_image(code) or official
+
+
+def _normalize_weiss_card(
+    row: dict,
+    *,
+    set_name: str = '',
+    locale: str = 'en',
+) -> Optional[dict]:
+    """Map a parsed official cardlist row into Proxyshop's cached card shape."""
+    code = str(row.get('code') or row.get('card_no') or row.get('id') or '').strip()
+    name = str(row.get('name') or '').strip()
+    if not code or not name:
+        return None
+    locale = str(row.get('locale') or locale or 'en')
+    if locale not in WS_LOCALES:
+        locale = 'en'
+    lang = _ws_locale_meta(locale)['lang']
+    publisher = str(row.get('set_name') or '')
+    if not publisher and '/' in code:
+        publisher = code.split('/', 1)[0]
+    label = (set_name or publisher or '').strip()
+    image = _ws_best_image(
+        code, locale,
+        _ws_absolute_image(str(row.get('image') or ''), code, locale=locale))
+    provider = {
+        'card_no': code,
+        'code': code,
+        'name': name,
+        'locale': locale,
+        'set': {'name': label} if label else {},
+        'images': {'small': image, 'large': image},
+        'url': f'{_ws_cardlist(locale)}/?cardno={code}',
+    }
+    return {
+        'object': 'card',
+        'game': 'weiss-schwarz',
+        'id': _ws_card_id(code, locale),
+        'name': name,
+        'set': label,
+        'set_name': label,
+        'collector_number': code.split('/', 1)[1] if '/' in code else code,
+        'lang': lang,
+        'released_at': None,
+        'images': {'small': image, 'large': image},
+        'provider_data': provider,
+    }
+
+
+def search_weiss_schwarz(name: str, limit: int = 20) -> list[dict]:
+    """Search Weiß Schwarz cards via the official EN + JP cardlists (no API key).
+
+    Queries both locales and interleaves the hits so Japanese printings are not
+    crowded out by a large English match set.
+    """
+    q = (name or '').strip()
+    if len(q) < 2:
+        return []
+    limit = max(limit, 1)
+    by_locale: dict[str, list[dict]] = {loc: [] for loc in WS_LOCALE_ORDER}
+    seen: set[str] = set()
+    for locale in WS_LOCALE_ORDER:
+        page_html = _ws_fetch_html(
+            f'{_ws_cardlist(locale)}/search',
+            params={'keyword': q, 'cmd': 'search', 'show_page_count': limit})
+        for row in _parse_ws_cardlist_html(page_html, locale=locale):
+            card = _normalize_weiss_card(row, locale=locale)
+            if not card or card['id'] in seen:
+                continue
+            seen.add(card['id'])
+            by_locale[locale].append(card)
+            if len(by_locale[locale]) >= limit:
+                break
+
+    cards: list[dict] = []
+    buckets = [by_locale[loc] for loc in WS_LOCALE_ORDER]
+    indexes = [0] * len(buckets)
+    while len(cards) < limit:
+        progressed = False
+        for i, bucket in enumerate(buckets):
+            if indexes[i] < len(bucket):
+                cards.append(bucket[indexes[i]])
+                indexes[i] += 1
+                progressed = True
+                if len(cards) >= limit:
+                    break
+        if not progressed:
+            break
+    return cards
+
+
+def list_weiss_schwarz_page(page: int = 1, limit: int = 50) -> tuple[list[dict], Optional[int]]:
+    """Fetch one Weiß Schwarz catalog page (one official title).
+
+    ``page`` is 1-based over the combined EN+JP title dropdowns. ``limit`` caps
+    the rows the site returns per response. Returns ``(cards, title_count)``.
+    """
+    titles = _ws_title_list()
+    page = max(page, 1)
+    if page > len(titles):
+        return [], len(titles)
+    locale, title_id, title_name = titles[page - 1]
+    page_html = _ws_fetch_html(
+        f'{_ws_cardlist(locale)}/search',
+        params={'cmd': 'search', 'title_number': title_id,
+                'show_page_count': max(limit, 1)})
+    cards: list[dict] = []
+    seen: set[str] = set()
+    for row in _parse_ws_cardlist_html(page_html, locale=locale):
+        card = _normalize_weiss_card(row, set_name=title_name, locale=locale)
+        if not card or card['id'] in seen:
+            continue
+        seen.add(card['id'])
+        cards.append(card)
+    return cards, len(titles)
+
+
 # Games that support cache-game (selective for mtg/pokemon; full for small TCGs)
-CATALOG_GAMES = ('mtg', 'pokemon', 'riftbound', 'union-arena')
+CATALOG_GAMES = ('mtg', 'pokemon', 'riftbound', 'union-arena', 'weiss-schwarz')
 
 # Registry used by the server: game -> search callable
 PROVIDERS: dict[str, Callable[[str, int], list[dict]]] = {
     'pokemon': search_pokemon,
     'union-arena': search_union_arena,
     'riftbound': search_riftbound,
+    'weiss-schwarz': search_weiss_schwarz,
 }
