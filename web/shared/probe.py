@@ -306,12 +306,16 @@ def probe_weiss_schwarz(print_fn: Callable[[str], None] = print) -> None:
             if 'view' in has:
                 _submit('submit3 (text view)', form,
                         {**over, 'view': 'text'}, parse, print_fn)
-            for field in ('title_number', 'expansion'):
+            for field in ('expansion_name', 'title_number', 'expansion'):
                 opts = dict(_selects(body)).get(field) or []
                 if opts:
+                    over4 = {field: opts[0][0]}
+                    if 'show_page_count' in has:
+                        over4['show_page_count'] = '100'
+                    if 'view' in has:
+                        over4['view'] = 'image'
                     _submit(f'submit4 ({field}={opts[0][0]})', form,
-                            {field: opts[0][0], 'show_page_count': '100'},
-                            parse, print_fn)
+                            over4, parse, print_fn)
                     break
 
         _hunt_endpoints(body, root, print_fn)

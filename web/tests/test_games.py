@@ -82,64 +82,105 @@ def _ua_fake_fetch(url, params=None):
     return UA_SERIES_HTML
 
 
-WS_SEARCH_HTML = '''
+# Legacy flat cardimages (no cardno) — exercises the filename fallback parser.
+WS_LEGACY_FLAT_HTML = '''
 <ul class="cardlist">
   <li>
-    <a href="/cardlist/?cardno=CCS/WX01-001">
-      <img src="/cardlist/cardimages/CCS_WX01_001.png?v=2"
-           alt="CCS/WX01-001 Sakura">
-    </a>
+    <img src="/cardlist/cardimages/CCS_WX01_001.png?v=2"
+         alt="CCS/WX01-001 Sakura">
   </li>
   <li>
-    <a href="/cardlist/?cardno=CCS/WX01-002">
-      <img src="/cardlist/cardimages/CCS_WX01_002.png"
-           alt="CCS/WX01-002">
-      <p class="card_name">Tomoyo</p>
-    </a>
+    <img src="/cardlist/cardimages/CCS_WX01_002.png"
+         alt="CCS/WX01-002">
+    <p class="card_name">Tomoyo</p>
   </li>
 </ul>
 '''
 
-WS_JP_SEARCH_HTML = '''
-<ul class="cardlist">
-  <li>
-    <a href="/cardlist/?cardno=KC/S25-001">
-      <img src="/cardlist/cardimages/KC_S25_001.png"
-           alt="KC/S25-001 島風">
-    </a>
-  </li>
+# Current EN searchresults markup: cardno + nested WordPress image paths.
+WS_SEARCH_HTML = '''
+<script>var cur_page = 1; var max_page = 1;</script>
+<ul class="p-cards__results-list cardlist-Result_List">
+  <li><a href="/cardlist/?cardno=CCS/WX01-001&amp;expansion_name=92&amp;view=image">
+    <img src="/wordpress/wp-content/images/cardimages/c/ccs_wx01/CCS_WX01_001.png"
+         alt="Sakura decoding="async"/></a></li>
+  <li><a href="/cardlist/?cardno=CCS/WX01-002&amp;expansion_name=92&amp;view=image">
+    <img src="/wordpress/wp-content/images/cardimages/c/ccs_wx01/CCS_WX01_002.png"
+         alt="Tomoyo"/></a></li>
 </ul>
+'''
+
+WS_SEARCH_HTML_PAGE2 = '''
+<li class="ex-item"><a href="/cardlist/?cardno=CCS/WX01-003&amp;expansion_name=92&amp;view=image">
+  <img src="/wordpress/wp-content/images/cardimages/c/ccs_wx01/CCS_WX01_003.png"
+       alt="Touya"/></a></li>
 '''
 
 WS_TITLE_HTML = '''
-<select name="title_number" id="title_number">
+<select name="title" id="title">
   <option value="">Select Title</option>
-  <option value="WX01">Cardcaptor Sakura : Clear Card</option>
-  <option value="WX02">Fate/Grand Order</option>
+  <option value="100">Ignored Title Dropdown</option>
 </select>
+<select name="expansion_name" id="expansion">
+  <option value="">Select Expansion</option>
+  <option value="92">Cardcaptor Sakura : Clear Card</option>
+  <option value="93">Fate/Grand Order</option>
+</select>
+<select name="rarity"><option value="RR">RR</option></select>
 '''
 
-WS_JP_TITLE_HTML = '''
-<select name="title_number" id="title_number">
-  <option value="">タイトルを選択</option>
-  <option value="S25">艦隊これくしょん -艦これ-</option>
-</select>
-'''
+WS_JP_FILTER_OPTIONS = {
+    'expansions': [
+        {'id': 113, 'name': '艦隊これくしょん -艦これ-', 'disp_flg': 1},
+    ],
+    'sides': [],
+}
+
+WS_JP_SEARCH_JSON = {
+    'items': [{
+        'id': 7350,
+        'card_number': 'KC/S25-001',
+        'card_name': '島風',
+        'title_number': 'KC',
+        'picture': 'k/kc_s25/kc_s25_001.png',
+        'expansion': 113,
+    }],
+    'total': 1,
+    'page': 1,
+    'limit': 50,
+    'page_count': 1,
+}
 
 
 def _ws_fake_fetch(url, params=None):
-    """Stub cardlist HTML: EN vs JP by origin, search vs title by params."""
+    """Stub EN cardlist HTML: root expansions, searchresults, cardsearch_ex."""
     params = params or {}
-    japanese = '//ws-tcg.com' in url
-    if params.get('cmd') == 'search':
-        return WS_JP_SEARCH_HTML if japanese else WS_SEARCH_HTML
-    return WS_JP_TITLE_HTML if japanese else WS_TITLE_HTML
+    if 'cardsearch_ex' in url:
+        return WS_SEARCH_HTML_PAGE2 if int(params.get('page') or 1) >= 2 else ''
+    if 'searchresults' in url:
+        html = WS_SEARCH_HTML
+        # Multi-page expansion when tests ask for expansion 92 with max_page>1
+        if str(params.get('expansion_name') or '') == '92':
+            html = html.replace('max_page = 1', 'max_page = 2')
+        return html
+    return WS_TITLE_HTML
+
+
+def _ws_fake_jp_api(path, params=None):
+    """Stub JP Cake CardListUser JSON."""
+    params = params or {}
+    if path.endswith('/filter-options'):
+        return WS_JP_FILTER_OPTIONS
+    if path.endswith('/searchJson'):
+        return WS_JP_SEARCH_JSON
+    raise games.ProviderError(f'unexpected JP API path {path}')
 
 
 @pytest.fixture
 def ws_offline(monkeypatch):
-    """Stub every Weiß Schwarz network path (cardlist, DeckLog, probes)."""
+    """Stub every Weiß Schwarz network path (cardlist, Cake API, DeckLog)."""
     monkeypatch.setattr(games, '_ws_fetch_html', _ws_fake_fetch)
+    monkeypatch.setattr(games, '_ws_jp_api', _ws_fake_jp_api)
     monkeypatch.setattr(games, '_ws_title_cache', None)
     monkeypatch.setattr(games, '_ws_decklog_index', lambda locale='en', force=False: {})
     monkeypatch.setattr(games, '_ws_url_exists', lambda url: False)
@@ -255,15 +296,18 @@ class TestNormalization:
         assert len(rows) == 2
         assert rows[0]['code'] == 'CCS/WX01-001'
         assert rows[0]['name'] == 'Sakura'
-        assert rows[0]['image'].endswith('/cardlist/cardimages/CCS_WX01_001.png')
-        # Second card's alt is bare code only — name comes from the nearby cell
+        assert '/wordpress/wp-content/images/cardimages/' in rows[0]['image']
+        assert rows[0]['image'].endswith('CCS_WX01_001.png')
         assert rows[1]['name'] == 'Tomoyo'
 
-    def test_parse_ws_jp_cardlist_html(self):
-        (row,) = games._parse_ws_cardlist_html(WS_JP_SEARCH_HTML, locale='ja')
-        assert row['code'] == 'KC/S25-001'
-        assert row['image'].startswith('https://ws-tcg.com/')
-        assert '島風' in row['name']
+    def test_parse_ws_cardlist_html_legacy_flat(self):
+        """Old flat cardimages/FILE.png pages still parse via filename fallback."""
+        rows = games._parse_ws_cardlist_html(WS_LEGACY_FLAT_HTML, locale='en')
+        assert len(rows) == 2
+        assert rows[0]['code'] == 'CCS/WX01-001'
+        assert rows[0]['name'] == 'Sakura'
+        assert rows[0]['image'].endswith('/cardlist/cardimages/CCS_WX01_001.png')
+        assert rows[1]['name'] == 'Tomoyo'
 
     def test_weiss_schwarz_empty_query(self):
         assert games.search_weiss_schwarz('a') == []
@@ -276,7 +320,8 @@ class TestNormalization:
         assert card['name'] == 'Sakura'
         assert card['collector_number'] == 'WX01-001'
         assert card['set'] == 'CCS'
-        assert card['images']['large'].endswith('/cardimages/CCS_WX01_001.png')
+        assert card['images']['large'].endswith(
+            '/wordpress/wp-content/images/cardimages/c/ccs_wx01/CCS_WX01_001.png')
         assert card['images']['small'] == card['images']['large']
         assert images.image_uri(card, 'large') == card['images']['large']
 
@@ -287,7 +332,10 @@ class TestNormalization:
         assert 'ja' in langs
         ja = next(c for c in cards if c['lang'] == 'ja')
         assert ja['id'].startswith('ws-ja-')
-        assert ja['images']['large'].startswith('https://ws-tcg.com/')
+        assert ja['name'] == '島風'
+        assert ja['images']['large'] == (
+            'https://ws-tcg.com/wordpress/wp-content/images/cardlist/'
+            'k/kc_s25/kc_s25_001.png')
 
     def test_ws_locale_ids_never_collide(self):
         assert games._ws_card_id('CCS/WX01-001', 'en') != (
@@ -320,9 +368,10 @@ class TestNormalization:
 
     def test_list_weiss_schwarz_page(self, ws_offline):
         cards, total = games.list_weiss_schwarz_page(page=1)
-        # 2 EN titles + 1 JP title
+        # 2 EN expansions + 1 JP Cake expansion; page 1 pulls max_page=2 fragments
         assert total == 3
-        assert len(cards) == 2
+        assert [c['collector_number'] for c in cards] == [
+            'WX01-001', 'WX01-002', 'WX01-003']
         assert cards[0]['lang'] == 'en'
         assert cards[0]['set_name'] == 'Cardcaptor Sakura : Clear Card'
         jp_cards, total2 = games.list_weiss_schwarz_page(page=3)
@@ -334,24 +383,26 @@ class TestNormalization:
         assert empty == []
         assert total3 == 3
 
-    def test_ws_titles_ignore_other_dropdowns(self):
-        """Only the title dropdown counts — sibling filters aren't titles.
+    def test_ws_titles_prefer_expansion_not_title(self):
+        """Only expansion_name/expansion counts — title + rarity are ignored.
 
-        Treating every <option> on the page as a title made the catalog walk a
-        page per rarity/per-page value, search for a title that doesn't exist,
+        Mixing title and expansion ID spaces made the catalog walk wrong filters
         and report success having stored nothing.
         """
         page = '''
         <select name="rarity"><option value="RR">RR</option>
           <option value="SR">SR</option><option value="C">C</option></select>
-        <select name="title_number" id="title_number">
-          <option value="">Select Title</option>
-          <option value="WX01">Cardcaptor Sakura</option>
+        <select name="title" id="title">
+          <option value="100">Ignored Title</option>
+        </select>
+        <select name="expansion_name" id="expansion">
+          <option value="">Select Expansion</option>
+          <option value="92">Cardcaptor Sakura</option>
         </select>
         <select name="show_page_count"><option value="50">50</option>
           <option value="100">100</option></select>
         '''
-        assert games._parse_ws_titles(page) == [('WX01', 'Cardcaptor Sakura')]
+        assert games._parse_ws_titles(page) == [('92', 'Cardcaptor Sakura')]
 
     def test_ws_titles_fall_back_when_no_named_select(self):
         """An unfamiliar layout degrades to the old behaviour, not to empty."""

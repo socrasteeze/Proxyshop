@@ -14,19 +14,25 @@ from web.shared import probe
 BASE = 'https://en.ws-tcg.com/cardlist/'
 
 REAL_ISH_PAGE = '''
-<form action="/cardlist/search/" method="post">
+<form action="/cardlist/searchresults/" method="get">
   <input name="keyword" type="text">
-  <input name="keyword_type[]" type="checkbox">
-  <select name="title_number" id="title_number">
+  <input name="keyword_type[]" type="checkbox" value="name">
+  <select name="title" id="title">
     <option value="">Select Title</option>
-    <option value="591101">Cardcaptor Sakura</option>
-    <option value="591102">Fate/Grand Order</option>
+    <option value="100">Ignored Title</option>
   </select>
-  <select name="show_page_count"><option value="30">30</option></select>
+  <select name="expansion_name" id="expansion">
+    <option value="">Select Expansion</option>
+    <option value="92">Cardcaptor Sakura</option>
+    <option value="93">Fate/Grand Order</option>
+  </select>
+  <input name="view" type="hidden" value="image">
 </form>
 <script src="/assets/js/cardlist.js"></script>
-<ul class="cardlist">
-  <li><img src="/cardlist/cardimages/CCS_WX01_001.png" alt="CCS/WX01-001 Sakura"></li>
+<ul class="cardlist-Result_List">
+  <li><a href="/cardlist/?cardno=CCS/WX01-001">
+    <img src="/wordpress/wp-content/images/cardimages/CCS_WX01_001.png"
+         alt="Sakura"></a></li>
   <li><img src="/images/common/logo.svg" alt="logo"></li>
 </ul>
 '''
@@ -34,13 +40,12 @@ REAL_ISH_PAGE = '''
 # What a JS-driven cardlist really looks like: dropdowns present but empty,
 # because their options arrive by XHR after load.
 EMPTY_DROPDOWN_PAGE = '''
-<form action="/cardlist/search/" method="get">
-  <input name="keyword"><select name="title_number"></select>
-  <select name="expansion"></select>
+<form action="/cardlist/searchresults/" method="get">
+  <input name="keyword"><select name="title"></select>
+  <select name="expansion_name"></select>
 </form>
 <script src="/assets/js/search.js"></script>
 '''
-
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
@@ -68,30 +73,30 @@ class TestSummarizers:
 
     def test_selects_are_named_and_counted(self):
         found = dict(probe._selects(REAL_ISH_PAGE))
-        assert [v for v, _ in found['title_number']] == ['591101', '591102']
-        assert found['show_page_count'] == [('30', '30')]
+        assert [v for v, _ in found['expansion_name']] == ['92', '93']
+        assert [v for v, _ in found['title']] == ['100']
 
     def test_forms_resolve_relative_actions(self):
         (form,) = probe._forms(REAL_ISH_PAGE, BASE)
-        assert form['method'] == 'POST'
-        assert form['action'] == 'https://en.ws-tcg.com/cardlist/search/'
+        assert form['method'] == 'GET'
+        assert form['action'] == 'https://en.ws-tcg.com/cardlist/searchresults/'
         assert 'keyword_type[]' in form['fields']
 
     def test_card_signals_count_the_evidence(self):
         assert probe._card_signals(REAL_ISH_PAGE) == (
-            'img=2 cardimages=1 cardno=0 card_no=0')
+            'img=2 cardimages=1 cardno=1 card_no=0')
 
     def test_describe_reports_form_target_and_fields(self, lines, collect):
         probe._describe(REAL_ISH_PAGE, collect, deep=True, base_url=BASE)
         report = '\n'.join(lines)
-        assert 'form POST https://en.ws-tcg.com/cardlist/search/' in report
-        assert 'keyword' in report and 'title_number' in report
+        assert 'form GET https://en.ws-tcg.com/cardlist/searchresults/' in report
+        assert 'keyword' in report and 'expansion_name' in report
         assert 'signals: img=2' in report
 
     def test_search_form_prefers_the_keyword_form(self):
         page = '<form action="/a"><input name="x"></form>' + REAL_ISH_PAGE
         form = probe._search_form(page, BASE)
-        assert form['action'] == 'https://en.ws-tcg.com/cardlist/search/'
+        assert form['action'] == 'https://en.ws-tcg.com/cardlist/searchresults/'
 
 
 class TestProbeRun:
@@ -127,13 +132,14 @@ class TestProbeRun:
     def test_submit_sends_every_field_the_form_declares(self, stub, lines, collect):
         probe.probe_game('weiss-schwarz', collect)
         submits = [c for c in stub
-                   if c['url'].endswith('/cardlist/search/') and c['method'] == 'POST']
+                   if c['url'].endswith('/cardlist/searchresults/')
+                   and c['method'] == 'GET']
         assert submits, 'the discovered form was never submitted'
         sent = submits[0]['params']
         # Every declared field is present — a browser submits the whole form —
         # and no invented parameter (the old code's `cmd=search`) is added.
-        assert set(sent) == {'keyword', 'keyword_type[]', 'title_number',
-                             'show_page_count'}
+        assert set(sent) == {
+            'keyword', 'keyword_type[]', 'title', 'expansion_name', 'view'}
         assert 'cmd' not in sent
         assert sent['keyword'] == 'Sakura'
 
@@ -145,7 +151,7 @@ class TestProbeRun:
                                             EMPTY_DROPDOWN_PAGE))
         probe.probe_game('weiss-schwarz', collect)
         report = '\n'.join(lines)
-        assert 'title_number[0]' in report
+        assert 'expansion_name[0]' in report
         assert '_parse_ws_titles found: 0' in report
         assert 'parser rows: 0' in report
 

@@ -472,6 +472,18 @@ def run_cache_game(
                 _run_images_only(db, images_dir, progress, watch, print_fn, on_progress)
             else:
                 _run_catalog(db, images_dir, progress, watch, print_fn, on_progress)
+            # Weiß Schwarz once marked done after walking every expansion with
+            # zero cards (dead scrape endpoints). Refuse silent empty success.
+            if (
+                game == 'weiss-schwarz'
+                and progress.mode != 'images-only'
+                and progress.stored == 0
+                and (progress.total_hint or 0) > 0
+            ):
+                raise games.ProviderError(
+                    'Weiß Schwarz catalog finished with 0 cards stored '
+                    f'(expansions={progress.total_hint}). '
+                    'The official cardlist scrape likely broke — check endpoints.')
             progress.current = ''
             progress.status = 'done'
             progress.touch('complete')

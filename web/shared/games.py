@@ -1110,12 +1110,26 @@ def list_riftbound_locale_page(
 
 """
 * Weiß Schwarz (official EN + JP cardlists; DeckLog/YYT/EncoreDecks image fallbacks)
+*
+* EN (en.ws-tcg.com): HTML searchresults + cardsearch_ex infinite-scroll, keyed by
+*   expansion_name. Image paths live under /wordpress/wp-content/images/cardimages/.
+* JP (ws-tcg.com): Cake JSON API at /manage/CardListUser (filter-options + searchJson).
+*   Pictures live under /wordpress/wp-content/images/cardlist/{picture}.
 """
 
-# Card codes look like CCS/WX01-001; the official image filename swaps the
-# separators for underscores (CCS_WX01_001.png), which inverts cleanly.
+# JP catalog/search JSON (dropdowns are JS-filled; HTML scrape alone is empty).
+WS_JP_API = 'https://ws-tcg.com/manage/CardListUser'
+
+# Primary: result anchors carry ?cardno=CCS/WX01-001 (works for nested image paths).
+_WS_CARDNO_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*\bhref="[^"]*[?&]cardno=([^&"\']+)[^"]*"[^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+_WS_IMG_TAG_RE = re.compile(r'<img\b([^>]*)/?>', re.IGNORECASE)
+_WS_SRC_RE = re.compile(r'\b(?:data-src|src)="([^"]+)"', re.IGNORECASE)
+# Fallback for older flat (or nested) cardimages/FILE.png fixtures.
 _WS_IMAGE_RE = re.compile(
-    r'<img\b[^>]*?\b(?:data-src|src)="([^"]*?/cardimages/([^"/?]+)\.png[^"]*)"[^>]*?>',
+    r'<img\b[^>]*?\b(?:data-src|src)="([^"]*?/cardimages/(?:[^"/?]+/)*([^"/?]+)\.png[^"]*)"[^>]*?>',
     re.IGNORECASE,
 )
 _WS_ALT_RE = re.compile(r'\balt="([^"]*)"', re.IGNORECASE)
@@ -1130,16 +1144,15 @@ _WS_TITLE_OPTION_RE = re.compile(
     r'<option\b[^>]*\bvalue="([^"]+)"[^>]*>([^<]*)</option>',
     re.IGNORECASE,
 )
-# The cardlist form carries several dropdowns (title, expansion, rarity, colour,
-# results-per-page). Scope the title options to their own <select> — reading
-# every <option> on the page yields e.g. rarity codes as "titles", and each one
-# then searches for a title that doesn't exist and quietly returns no cards.
+# Catalog walks expansions. Matching both title + expansion mixed two ID spaces
+# and quietly searched the wrong filter. Prefer expansion_name / expansion only.
 _WS_SELECT_RE = re.compile(
     r'<select\b([^>]*)>(.*?)</select>', re.IGNORECASE | re.DOTALL)
-_WS_TITLE_SELECT_RE = re.compile(
-    r'\b(?:name|id)="[^"]*(?:title|expansion|series)[^"]*"', re.IGNORECASE)
+_WS_EXPANSION_SELECT_RE = re.compile(
+    r'\bname="(?:expansion_name|expansion)"', re.IGNORECASE)
+_WS_MAX_PAGE_RE = re.compile(r'var\s+max_page\s*=\s*(\d+)', re.IGNORECASE)
 
-# Cached as list of (locale, title_id, label)
+# Cached as list of (locale, expansion_id, label)
 _ws_title_cache: Optional[list[tuple[str, str, str]]] = None
 _ws_title_lock = threading.Lock()
 # locale -> {card code: image url} built once from DeckLog
@@ -1164,7 +1177,7 @@ def _ws_images_base(locale: str = 'en') -> str:
 
 
 def _ws_image_filename(code: str) -> str:
-    """CCS/WX01-001 -> CCS_WX01_001.png (official cardimages naming)."""
+    """CCS/WX01-001 -> CCS_WX01_001.png (legacy cardimages naming)."""
     return str(code or '').replace('/', '_').replace('-', '_') + '.png'
 
 
@@ -1178,8 +1191,18 @@ def _ws_code_from_filename(filename: str) -> str:
 
 
 def _ws_image_url(code: str, locale: str = 'en') -> str:
-    """Build the official cardlist PNG URL from a card code."""
+    """Build a legacy official cardlist PNG URL from a card code."""
     return f'{_ws_images_base(locale)}/{_ws_image_filename(code)}'
+
+
+def _ws_jp_picture_url(picture: str) -> str:
+    """Absolute JP art URL from Cake ``picture`` (relative under images/cardlist/)."""
+    pic = (picture or '').strip()
+    if not pic:
+        return ''
+    if pic.startswith('http://') or pic.startswith('https://'):
+        return pic.split('?', 1)[0]
+    return f'{_ws_origin("ja")}/wordpress/wp-content/images/cardlist/{pic.lstrip("/")}'
 
 
 def _ws_absolute_image(src: str, code: str = '', *, locale: str = 'en') -> str:
@@ -1195,6 +1218,8 @@ def _ws_absolute_image(src: str, code: str = '', *, locale: str = 'en') -> str:
 def _ws_name_from_alt(alt: str, code: str) -> str:
     """Strip a leading card code off the alt text, leaving the card name."""
     text = html_lib.unescape(alt or '').strip()
+    # en.ws-tcg.com currently emits broken alts: alt="Name decoding="async"
+    text = re.sub(r'\s*decoding=$', '', text).strip()
     if code and text.startswith(code):
         return text[len(code):].strip(' 　-–—:：') or ''
     # Some pages use the underscored filename form as the alt prefix instead
@@ -1210,16 +1235,64 @@ def _ws_card_id(code: str, locale: str = 'en') -> str:
     return f'ws-ja-{safe}' if locale == 'ja' else f'ws-{safe}'
 
 
-def _parse_ws_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]:
-    """Extract card rows from official cardlist search/title HTML.
+def _ws_row_from_parts(
+    code: str, name: str, image: str, *, locale: str = 'en',
+) -> Optional[dict]:
+    code = (code or '').strip()
+    name = (name or '').strip()
+    if not code or not name:
+        return None
+    return {
+        'code': code,
+        'name': name,
+        'set_name': code.split('/', 1)[0] if '/' in code else '',
+        'image': image,
+        'locale': locale,
+    }
 
-    Anchored on the ``cardimages/*.png`` thumbnails rather than on the
-    surrounding markup: the card code is recoverable from the filename alone,
-    so a layout change on the official site can't silently drop every card.
+
+def _parse_ws_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]:
+    """Extract card rows from official EN cardlist HTML (searchresults fragments).
+
+    Primary anchor is ``?cardno=…`` on result links (stable across nested
+    WordPress image paths). Falls back to ``cardimages/*.png`` filenames for
+    older fixtures / pages that omit cardno.
     """
     html_text = page_html or ''
     rows: list[dict] = []
     seen: set[str] = set()
+
+    for match in _WS_CARDNO_ANCHOR_RE.finditer(html_text):
+        code = html_lib.unescape(match.group(1)).strip()
+        if not code or code in seen:
+            continue
+        body = match.group(2)
+        src = ''
+        alt = ''
+        img = _WS_IMG_TAG_RE.search(body)
+        if img:
+            attrs = img.group(1)
+            src_m = _WS_SRC_RE.search(attrs)
+            alt_m = _WS_ALT_RE.search(attrs) or _WS_TITLE_ATTR_RE.search(attrs)
+            if src_m:
+                src = html_lib.unescape(src_m.group(1))
+            if alt_m:
+                alt = alt_m.group(1)
+        name = _ws_name_from_alt(alt, code)
+        if not name:
+            near = _WS_NAME_NEAR_RE.search(
+                html_text, match.end(), match.end() + 800)
+            if near:
+                name = html_lib.unescape(near.group(1)).strip()
+        row = _ws_row_from_parts(
+            code, name,
+            _ws_absolute_image(src, code, locale=locale),
+            locale=locale)
+        if not row:
+            continue
+        seen.add(code)
+        rows.append(row)
+
     for match in _WS_IMAGE_RE.finditer(html_text):
         code = _ws_code_from_filename(html_lib.unescape(match.group(2)))
         if not code or code in seen:
@@ -1228,34 +1301,32 @@ def _parse_ws_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]
         alt_match = _WS_ALT_RE.search(tag) or _WS_TITLE_ATTR_RE.search(tag)
         name = _ws_name_from_alt(alt_match.group(1) if alt_match else '', code)
         if not name:
-            # Fall back to the labelled name cell that follows the thumbnail
-            near = _WS_NAME_NEAR_RE.search(html_text, match.end(), match.end() + 800)
+            near = _WS_NAME_NEAR_RE.search(
+                html_text, match.end(), match.end() + 800)
             if near:
                 name = html_lib.unescape(near.group(1)).strip()
-        if not name:
+        row = _ws_row_from_parts(
+            code, name,
+            _ws_absolute_image(
+                html_lib.unescape(match.group(1)), code, locale=locale),
+            locale=locale)
+        if not row:
             continue
         seen.add(code)
-        rows.append({
-            'code': code,
-            'name': name,
-            'set_name': code.split('/', 1)[0] if '/' in code else '',
-            'image': _ws_absolute_image(
-                html_lib.unescape(match.group(1)), code, locale=locale),
-            'locale': locale,
-        })
+        rows.append(row)
     return rows
 
 
 def _parse_ws_titles(page_html: str) -> list[tuple[str, str]]:
-    """Parse title (series) options from the cardlist filter form.
+    """Parse expansion options from the EN cardlist filter form.
 
-    Prefers the dropdown that names itself after titles/expansions; falls back
-    to every option on the page when no such select is present, so an unfamiliar
-    layout degrades to the old behaviour rather than to an empty catalog.
+    Prefers ``name="expansion_name"`` / ``name="expansion"``. Does not mix in
+    the separate title dropdown (different ID space). Falls back to every
+    option on the page only when no expansion select is present.
     """
     scoped = ''
     for attrs, body in _WS_SELECT_RE.findall(page_html or ''):
-        if _WS_TITLE_SELECT_RE.search(attrs):
+        if _WS_EXPANSION_SELECT_RE.search(attrs):
             scoped += body
     titles: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -1274,21 +1345,118 @@ def _ws_fetch_html(url: str, params: Optional[dict] = None) -> str:
     return res.text or ''
 
 
+def _ws_jp_api(path: str, params: Optional[dict] = None) -> Any:
+    """GET JSON from the JP CardListUser Cake API."""
+    return _get(
+        f'{WS_JP_API}{path}',
+        params=params or {},
+        extra_headers={
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': f'{_ws_origin("ja")}/cardlist/',
+        },
+    )
+
+
+def _ws_jp_expansions() -> list[tuple[str, str]]:
+    """Return (expansion_id, label) from the JP filter-options API."""
+    payload = _ws_jp_api('/filter-options')
+    if not isinstance(payload, dict):
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in payload.get('expansions') or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get('disp_flg') in (0, '0', False):
+            continue
+        eid = str(row.get('id') or '').strip()
+        label = str(row.get('name') or '').strip()
+        if not eid or not label or eid in seen:
+            continue
+        seen.add(eid)
+        out.append((eid, label))
+    return out
+
+
+def _ws_jp_item_row(item: dict) -> Optional[dict]:
+    """Map one Cake searchJson item into the shared WS row shape."""
+    if not isinstance(item, dict):
+        return None
+    code = str(item.get('card_number') or '').strip()
+    name = str(item.get('card_name') or '').strip()
+    publisher = str(item.get('title_number') or '').strip()
+    row = _ws_row_from_parts(
+        code, name, _ws_jp_picture_url(str(item.get('picture') or '')),
+        locale='ja')
+    if row and publisher:
+        row['set_name'] = publisher
+    return row
+
+
+def _ws_en_fetch_expansion(expansion_id: str) -> list[dict]:
+    """All EN cards for one expansion (searchresults page 1 + cardsearch_ex)."""
+    base = _ws_cardlist('en')
+    page_html = _ws_fetch_html(
+        f'{base}/searchresults/',
+        params={'expansion_name': expansion_id, 'view': 'image'})
+    rows = _parse_ws_cardlist_html(page_html, locale='en')
+    max_page = 1
+    m = _WS_MAX_PAGE_RE.search(page_html or '')
+    if m:
+        max_page = max(1, int(m.group(1)))
+    for page_n in range(2, max_page + 1):
+        frag = _ws_fetch_html(
+            f'{base}/cardsearch_ex',
+            params={
+                'expansion_name': expansion_id,
+                'view': 'image',
+                'page': page_n,
+            })
+        rows.extend(_parse_ws_cardlist_html(frag, locale='en'))
+    return rows
+
+
+def _ws_jp_fetch_expansion(expansion_id: str) -> list[dict]:
+    """All JP cards for one Cake expansion id (paginated searchJson)."""
+    rows: list[dict] = []
+    page_n = 1
+    while True:
+        payload = _ws_jp_api(
+            '/searchJson', params={'expansion': expansion_id, 'page': page_n})
+        if not isinstance(payload, dict):
+            break
+        items = payload.get('items') or []
+        for item in items:
+            row = _ws_jp_item_row(item)
+            if row:
+                rows.append(row)
+        page_count = int(payload.get('page_count') or 0)
+        if not items or page_n >= page_count:
+            break
+        page_n += 1
+    return rows
+
+
 def _ws_title_list(*, force: bool = False) -> list[tuple[str, str, str]]:
-    """Return (locale, title_id, label) for the EN then JP title dropdowns."""
+    """Return (locale, expansion_id, label) for EN HTML then JP Cake expansions."""
     global _ws_title_cache
     with _ws_title_lock:
         if _ws_title_cache is not None and not force:
             return list(_ws_title_cache)
     combined: list[tuple[str, str, str]] = []
     errors: list[str] = []
-    for locale in WS_LOCALE_ORDER:
-        try:
-            page_html = _ws_fetch_html(f'{_ws_cardlist(locale)}/')
-            for title_id, label in _parse_ws_titles(page_html):
-                combined.append((locale, title_id, label))
-        except ProviderError as e:
-            errors.append(f'{locale}: {e}')
+    try:
+        page_html = _ws_fetch_html(f'{_ws_cardlist("en")}/')
+        for title_id, label in _parse_ws_titles(page_html):
+            combined.append(('en', title_id, label))
+    except ProviderError as e:
+        errors.append(f'en: {e}')
+    try:
+        for title_id, label in _ws_jp_expansions():
+            combined.append(('ja', title_id, label))
+    except ProviderError as e:
+        errors.append(f'ja: {e}')
     if not combined:
         detail = '; '.join(errors) if errors else 'empty responses'
         raise ProviderError(f'Weiß Schwarz cardlist returned no titles ({detail})')
@@ -1424,7 +1592,7 @@ def _normalize_weiss_card(
 
 
 def search_weiss_schwarz(name: str, limit: int = 20) -> list[dict]:
-    """Search Weiß Schwarz cards via the official EN + JP cardlists (no API key).
+    """Search Weiß Schwarz cards via EN searchresults HTML + JP Cake JSON.
 
     Queries both locales and interleaves the hits so Japanese printings are not
     crowded out by a large English match set.
@@ -1435,18 +1603,44 @@ def search_weiss_schwarz(name: str, limit: int = 20) -> list[dict]:
     limit = max(limit, 1)
     by_locale: dict[str, list[dict]] = {loc: [] for loc in WS_LOCALE_ORDER}
     seen: set[str] = set()
-    for locale in WS_LOCALE_ORDER:
+
+    # EN — redesigned searchresults endpoint (page 1 covers typical search limits)
+    try:
         page_html = _ws_fetch_html(
-            f'{_ws_cardlist(locale)}/search',
-            params={'keyword': q, 'cmd': 'search', 'show_page_count': limit})
-        for row in _parse_ws_cardlist_html(page_html, locale=locale):
-            card = _normalize_weiss_card(row, locale=locale)
+            f'{_ws_cardlist("en")}/searchresults/',
+            params={
+                'keyword': q,
+                'keyword_type[]': 'name',
+                'view': 'image',
+            })
+        for row in _parse_ws_cardlist_html(page_html, locale='en'):
+            card = _normalize_weiss_card(row, locale='en')
             if not card or card['id'] in seen:
                 continue
             seen.add(card['id'])
-            by_locale[locale].append(card)
-            if len(by_locale[locale]) >= limit:
+            by_locale['en'].append(card)
+            if len(by_locale['en']) >= limit:
                 break
+    except ProviderError:
+        pass
+
+    # JP — Cake searchJson
+    try:
+        payload = _ws_jp_api('/searchJson', params={'keyword': q, 'page': 1})
+        items = payload.get('items') or [] if isinstance(payload, dict) else []
+        for item in items:
+            row = _ws_jp_item_row(item)
+            if not row:
+                continue
+            card = _normalize_weiss_card(row, locale='ja')
+            if not card or card['id'] in seen:
+                continue
+            seen.add(card['id'])
+            by_locale['ja'].append(card)
+            if len(by_locale['ja']) >= limit:
+                break
+    except ProviderError:
+        pass
 
     cards: list[dict] = []
     buckets = [by_locale[loc] for loc in WS_LOCALE_ORDER]
@@ -1466,23 +1660,26 @@ def search_weiss_schwarz(name: str, limit: int = 20) -> list[dict]:
 
 
 def list_weiss_schwarz_page(page: int = 1, limit: int = 50) -> tuple[list[dict], Optional[int]]:
-    """Fetch one Weiß Schwarz catalog page (one official title).
+    """Fetch one Weiß Schwarz catalog page (one official expansion).
 
-    ``page`` is 1-based over the combined EN+JP title dropdowns. ``limit`` caps
-    the rows the site returns per response. Returns ``(cards, title_count)``.
+    ``page`` is 1-based over the combined EN HTML + JP Cake expansion lists.
+    Fetches every subpage for that expansion (``limit`` is accepted for API
+    compatibility with other catalog games but does not truncate — one cache
+    page is one full expansion). Returns ``(cards, expansion_count)``.
     """
+    del limit  # one expansion per page; never truncate mid-set
     titles = _ws_title_list()
     page = max(page, 1)
     if page > len(titles):
         return [], len(titles)
     locale, title_id, title_name = titles[page - 1]
-    page_html = _ws_fetch_html(
-        f'{_ws_cardlist(locale)}/search',
-        params={'cmd': 'search', 'title_number': title_id,
-                'show_page_count': max(limit, 1)})
+    if locale == 'ja':
+        raw_rows = _ws_jp_fetch_expansion(title_id)
+    else:
+        raw_rows = _ws_en_fetch_expansion(title_id)
     cards: list[dict] = []
     seen: set[str] = set()
-    for row in _parse_ws_cardlist_html(page_html, locale=locale):
+    for row in raw_rows:
         card = _normalize_weiss_card(row, set_name=title_name, locale=locale)
         if not card or card['id'] in seen:
             continue

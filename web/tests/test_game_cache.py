@@ -348,3 +348,20 @@ class TestCacheGameResume:
         assert tc and tc['count'] == 2
         got = {c['name'] for c in carddb.search_tag_local('art:dragon')}
         assert got == {'Shivan Dragon', 'Dragon Whelp'}
+
+    def test_weiss_rejects_empty_catalog_success(self, carddb, tmp_path, monkeypatch):
+        """Walking expansions that all return 0 cards must not mark the run done."""
+        monkeypatch.setattr(
+            games, 'list_weiss_schwarz_page',
+            lambda page=1, limit=50: ([], 3))
+        with pytest.raises(games.ProviderError, match='0 cards stored'):
+            game_cache.run_cache_game(
+                db=carddb,
+                game='weiss-schwarz',
+                images_dir=tmp_path / 'images',
+                runs_dir=tmp_path / 'runs',
+                download_images=False,
+                fresh=True,
+                use_signals=False,
+                print_fn=lambda *a, **k: None,
+            )
