@@ -6,7 +6,7 @@
 *   - pokemon        -> pokemontcg.io (free; optional API key raises limits)
 *   - union-arena    -> unionarena-tcg.com NA+JP cardlists (public; no API key)
 *   - riftbound      -> riftcodex.com (+ DotGG ARC; official JA/KO names)
-*   - weiss-schwarz  -> ws-tcg.com EN+JP cardlists (+ DeckLog/YYT/EncoreDecks art)
+*   - weiss-schwarz  -> ws-tcg.com EN+JP cardlists (high-res official art; SAMPLE OK)
 * Must never import from `src/`.
 """
 # Standard Library Imports
@@ -37,8 +37,8 @@ UA_LOCALES = {
     'ja': {'path': 'jp', 'lang': 'ja'},
 }
 UA_LOCALE_ORDER = ('en', 'ja')
-# Weiß Schwarz official cardlists, each paired with its DeckLog deck-builder
-# host (the preferred image source — see _ws_best_image).
+# Weiß Schwarz official cardlists, each paired with its DeckLog host (used only
+# when official art is missing — see _ws_best_image).
 WS_LOCALES = {
     'en': {
         'origin': 'https://en.ws-tcg.com',
@@ -1109,7 +1109,7 @@ def list_riftbound_locale_page(
 
 
 """
-* Weiß Schwarz (official EN + JP cardlists; DeckLog/YYT/EncoreDecks image fallbacks)
+* Weiß Schwarz (official EN + JP high-res cardlists; SAMPLE watermarks kept)
 *
 * EN (en.ws-tcg.com): HTML searchresults + cardsearch_ex infinite-scroll, keyed by
 *   expansion_name. Image paths live under /wordpress/wp-content/images/cardimages/.
@@ -1500,13 +1500,21 @@ def _ws_yuyutei_image(code: str) -> str:
 
 
 def _ws_encoredecks_image(code: str) -> str:
-    """Last-resort image lookup through the community EncoreDecks API."""
+    """Last-resort image lookup through the community EncoreDecks API.
+
+    These are small GIFs — only used when no high-res official URL exists.
+    """
     if not code:
         return ''
     try:
-        payload = _get(f'{ENCOREDECKS_API}/cards', params={'cardcode': code})
+        # Singular /card (plural /cards is a 404 HTML page).
+        payload = _get(f'{ENCOREDECKS_API}/card', params={'cardcode': code})
     except ProviderError:
         return ''
+    if isinstance(payload, dict):
+        src = str(payload.get('imagepath') or payload.get('image') or '').strip()
+        if src:
+            return src if src.startswith('http') else f'{ENCOREDECKS_API_IMAGES}/{src}'
     for row in _card_rows(payload):
         src = str(row.get('image') or row.get('imagepath') or '').strip()
         if src:
@@ -1527,18 +1535,20 @@ def _ws_url_exists(url: str) -> bool:
 
 
 def _ws_best_image(code: str, locale: str = 'en', scraped: str = '') -> str:
-    """Resolve the best available image URL for a card code.
+    """Resolve the highest-resolution image URL for a card code.
 
-    Order: DeckLog -> official cardlist -> Yuyutei -> EncoreDecks. The first two
-    tiers are free (an in-memory index and a constructed URL), so the probing
-    tiers only run for cards the official site has no art for.
+    Quality beats a clean preview: official cardlist PNGs are preferred even
+    when Bushiroad stamps SAMPLE. Low-res community GIFs (EncoreDecks) and
+    other probes only run when no official art URL is available.
     """
+    if scraped:
+        return scraped
+    official = _ws_image_url(code, locale=locale)
+    if _ws_url_exists(official):
+        return official
     from_decklog = _ws_decklog_index(locale).get(code)
     if from_decklog:
         return from_decklog
-    official = scraped or _ws_image_url(code, locale=locale)
-    if scraped or _ws_url_exists(official):
-        return official
     yuyutei = _ws_yuyutei_image(code)
     if _ws_url_exists(yuyutei):
         return yuyutei

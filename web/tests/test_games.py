@@ -341,22 +341,28 @@ class TestNormalization:
         assert games._ws_card_id('CCS/WX01-001', 'en') != (
             games._ws_card_id('CCS/WX01-001', 'ja'))
 
-    def test_ws_best_image_prefers_decklog(self, monkeypatch):
+    def test_ws_best_image_prefers_scraped_official(self, monkeypatch):
+        """High-res official art wins even when DeckLog/Encore also have a URL."""
         monkeypatch.setattr(
             games, '_ws_decklog_index',
             lambda locale='en', force=False: {
                 'CCS/WX01-001': 'https://decklog.example/CCS_WX01_001.png'})
-        assert games._ws_best_image('CCS/WX01-001', 'en', 'https://en.ws-tcg.com/x.png') == (
-            'https://decklog.example/CCS_WX01_001.png')
+        monkeypatch.setattr(
+            games, '_ws_encoredecks_image',
+            lambda code: 'https://www.encoredecks.com/images/EN/WX01/001.gif')
+        scraped = (
+            'https://en.ws-tcg.com/wordpress/wp-content/images/cardimages/'
+            'c/ccs_wx01/CCS_WX01_001.png')
+        assert games._ws_best_image('CCS/WX01-001', 'en', scraped) == scraped
 
     def test_ws_best_image_falls_back_to_encoredecks(self, monkeypatch):
         monkeypatch.setattr(games, '_ws_decklog_index', lambda locale='en', force=False: {})
         monkeypatch.setattr(games, '_ws_url_exists', lambda url: False)
         monkeypatch.setattr(
             games, '_ws_encoredecks_image',
-            lambda code: 'https://www.encoredecks.com/images/ccs.png')
+            lambda code: 'https://www.encoredecks.com/images/EN/WX01/001.gif')
         assert games._ws_best_image('CCS/WX01-001', 'en') == (
-            'https://www.encoredecks.com/images/ccs.png')
+            'https://www.encoredecks.com/images/EN/WX01/001.gif')
 
     def test_ws_decklog_failure_degrades(self, monkeypatch):
         """A dead DeckLog must not fail the card — fall through to official."""
