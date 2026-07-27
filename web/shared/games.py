@@ -1120,6 +1120,14 @@ _WS_TITLE_OPTION_RE = re.compile(
     r'<option\b[^>]*\bvalue="([^"]+)"[^>]*>([^<]*)</option>',
     re.IGNORECASE,
 )
+# The cardlist form carries several dropdowns (title, expansion, rarity, colour,
+# results-per-page). Scope the title options to their own <select> — reading
+# every <option> on the page yields e.g. rarity codes as "titles", and each one
+# then searches for a title that doesn't exist and quietly returns no cards.
+_WS_SELECT_RE = re.compile(
+    r'<select\b([^>]*)>(.*?)</select>', re.IGNORECASE | re.DOTALL)
+_WS_TITLE_SELECT_RE = re.compile(
+    r'\b(?:name|id)="[^"]*(?:title|expansion|series)[^"]*"', re.IGNORECASE)
 
 # Cached as list of (locale, title_id, label)
 _ws_title_cache: Optional[list[tuple[str, str, str]]] = None
@@ -1229,10 +1237,19 @@ def _parse_ws_cardlist_html(page_html: str, *, locale: str = 'en') -> list[dict]
 
 
 def _parse_ws_titles(page_html: str) -> list[tuple[str, str]]:
-    """Parse title (series) options from the cardlist filter form."""
+    """Parse title (series) options from the cardlist filter form.
+
+    Prefers the dropdown that names itself after titles/expansions; falls back
+    to every option on the page when no such select is present, so an unfamiliar
+    layout degrades to the old behaviour rather than to an empty catalog.
+    """
+    scoped = ''
+    for attrs, body in _WS_SELECT_RE.findall(page_html or ''):
+        if _WS_TITLE_SELECT_RE.search(attrs):
+            scoped += body
     titles: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for match in _WS_TITLE_OPTION_RE.finditer(page_html or ''):
+    for match in _WS_TITLE_OPTION_RE.finditer(scoped or page_html or ''):
         title_id = match.group(1).strip()
         label = html_lib.unescape(match.group(2)).strip()
         if not title_id or title_id in seen:

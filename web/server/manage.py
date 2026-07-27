@@ -6,6 +6,7 @@
 *   python -m web.server.manage cache-game --game mtg --set mh3 --art showcase
 *   python -m web.server.manage cache-game --game pokemon --set sv3 --type Fire
 *   python -m web.server.manage stats
+*   python -m web.server.manage probe-game --game weiss-schwarz
 """
 # Standard Library Imports
 import argparse
@@ -15,7 +16,7 @@ import sys
 from pathlib import Path
 
 # Local Imports
-from web.shared import games
+from web.shared import games, probe
 from web.shared.carddb import CardDB
 from web.shared.game_cache import (
     checkpoint_path, load_checkpoint, progress_dict, request_stop,
@@ -97,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser('stats', help='Show card DB statistics')
 
+    p_probe = sub.add_parser(
+        'probe-game',
+        help='Report what a scraped cardlist site actually returns (read-only)')
+    p_probe.add_argument('--game', required=True, choices=sorted(probe.PROBES),
+                         help='Only the HTML-scraping providers have probes')
+
     args = parser.parse_args(argv)
     db = CardDB(DATA_DIR / 'cards.db')
 
@@ -175,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f'ERROR: {e}', file=sys.stderr)
             return 1
         return 0
+
+    if args.cmd == 'probe-game':
+        return probe.probe_game(args.game)
 
     if args.cmd == 'stats':
         for k, v in db.stats().items():

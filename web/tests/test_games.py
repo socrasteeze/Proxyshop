@@ -334,6 +334,30 @@ class TestNormalization:
         assert empty == []
         assert total3 == 3
 
+    def test_ws_titles_ignore_other_dropdowns(self):
+        """Only the title dropdown counts — sibling filters aren't titles.
+
+        Treating every <option> on the page as a title made the catalog walk a
+        page per rarity/per-page value, search for a title that doesn't exist,
+        and report success having stored nothing.
+        """
+        page = '''
+        <select name="rarity"><option value="RR">RR</option>
+          <option value="SR">SR</option><option value="C">C</option></select>
+        <select name="title_number" id="title_number">
+          <option value="">Select Title</option>
+          <option value="WX01">Cardcaptor Sakura</option>
+        </select>
+        <select name="show_page_count"><option value="50">50</option>
+          <option value="100">100</option></select>
+        '''
+        assert games._parse_ws_titles(page) == [('WX01', 'Cardcaptor Sakura')]
+
+    def test_ws_titles_fall_back_when_no_named_select(self):
+        """An unfamiliar layout degrades to the old behaviour, not to empty."""
+        page = '<select><option value="WX01">Cardcaptor Sakura</option></select>'
+        assert games._parse_ws_titles(page) == [('WX01', 'Cardcaptor Sakura')]
+
     def test_riftbound_normalization(self, monkeypatch):
         payload = {
             'items': [{

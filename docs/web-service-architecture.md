@@ -153,6 +153,24 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   `PROXYSHOP_CACHE_PROVIDER_INTERVAL`, `PROXYSHOP_CACHE_PAGE_INTERVAL`,
   `PROXYSHOP_CACHE_CARD_INTERVAL`, `PROXYSHOP_CACHE_IMAGE_INTERVAL`.
 
+  **When a cache run stores 0 cards:** Union Arena and Weiß Schwarz have no
+  public API — they are scraped from the official cardlists, so a layout change
+  there looks exactly like an empty catalog (the run "succeeds" and stores
+  nothing). The offline tests can't catch that, because their fixtures are our
+  own markup. Ask the site what it actually serves:
+
+  ```bash
+  docker exec proxyshop-web \
+      python -m web.server.manage probe-game --game weiss-schwarz
+  ```
+
+  Read-only. It prints, per locale, the dropdowns and their option counts, the
+  search form's method/action/fields, the directories the page's images really
+  live in, how many rows the current parser extracts, and the same for several
+  request shapes (GET/POST, browser headers, keyword search) — plus the DeckLog
+  and EncoreDecks fallbacks. Run it from the NAS: these sites block most
+  datacenter IPs, so a sandbox gets 403 regardless of the markup.
+
   Re-run the start command to resume from the checkpoint under
   `/data/cache-runs/`. Use `--fresh` to start over, `--images-only` to fill
   missing images for cards already in the DB. Riftbound uses public Riftcodex
