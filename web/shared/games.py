@@ -60,6 +60,16 @@ ENCOREDECKS_API_IMAGES = 'https://www.encoredecks.com/images'
 _POKEMONTCG_KEY_FILE = os.environ.get(
     'PROXYSHOP_POKEMONTCG_KEY_FILE', '/run/secrets/proxyshop-pokemontcg-key')
 
+# The cardlist scrapes share HEADERS with the JSON providers, which asks for
+# `Accept: application/json`. en.ws-tcg.com content-negotiates on it and answers
+# every cardlist URL with `500 {"message":"An Internal Error Has Occurred."}` —
+# so the English catalog failed on the request, not on the parse. Scrapes must
+# ask for what they actually want to read.
+HTML_ACCEPT = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8',
+}
+
 # Polite default pacing for all live provider calls (~4 req/s).
 # Override with PROXYSHOP_PROVIDER_INTERVAL (seconds).
 PROVIDER_INTERVAL = float(os.environ.get('PROXYSHOP_PROVIDER_INTERVAL', '0.25'))
@@ -502,7 +512,7 @@ def _parse_ua_series(page_html: str) -> list[tuple[str, str]]:
 
 
 def _ua_fetch_html(url: str, params: Optional[dict] = None) -> str:
-    res = _request(url, params=params)
+    res = _request(url, params=params, extra_headers=HTML_ACCEPT)
     return res.text or ''
 
 
@@ -1260,7 +1270,7 @@ def _parse_ws_titles(page_html: str) -> list[tuple[str, str]]:
 
 
 def _ws_fetch_html(url: str, params: Optional[dict] = None) -> str:
-    res = _request(url, params=params)
+    res = _request(url, params=params, extra_headers=HTML_ACCEPT)
     return res.text or ''
 
 
