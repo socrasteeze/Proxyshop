@@ -4,12 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Proxyshop{% endblock %}</title>
+  <link rel="icon" href="/static/img/favicon.ico" sizes="any">
+  <link rel="icon" href="/static/img/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <header>
-    <h1><a href="/" class="brand">Proxyshop</a></h1>
+    <h1><a href="/" class="brand">
+      <img src="/static/img/logo-96.png" alt="" class="brand-logo" width="28" height="28">
+      Proxyshop</a></h1>
     {% set path = request.url.path if request else '' %}
     <nav aria-label="Main">
       <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>Editor</a>

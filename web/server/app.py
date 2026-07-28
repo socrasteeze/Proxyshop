@@ -241,6 +241,12 @@ def _capabilities() -> Optional[Capabilities]:
 """
 
 
+@app.get('/favicon.ico', include_in_schema=False)
+def favicon():
+    """Serve the Proxyshop logo for clients that request /favicon.ico directly."""
+    return FileResponse(STATIC_DIR / 'img' / 'favicon.ico', media_type='image/x-icon')
+
+
 @app.get('/', response_class=HTMLResponse)
 def page_index(request: Request, card_id: str = ''):
     caps = _capabilities()

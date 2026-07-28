@@ -43,8 +43,14 @@ header {
   z-index: 40;
 }
 header h1 { font-size: 1.1rem; margin: 0; letter-spacing: .02em; }
-header h1 .brand { color: var(--text); }
+header h1 .brand { color: var(--text); display: inline-flex; align-items: center; gap: .55rem; }
 header h1 .brand:hover { text-decoration: none; color: var(--accent); }
+header h1 .brand-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: block;
+}
 header nav { display: flex; gap: .35rem; flex-wrap: wrap; }
 header nav a {
   color: var(--muted);
