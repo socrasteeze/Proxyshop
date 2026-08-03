@@ -128,6 +128,16 @@ class TestTagCache:
         assert carddb.get_tag_cache('art:unknown') is None
         assert carddb.search_tag_local('art:unknown') == []
 
+    def test_list_cached_tags_is_alphabetical(self, carddb):
+        # Cache 'otag:ramp' first (so it's most recently refreshed) then
+        # 'art:dragon' — a recency sort would put otag:ramp first; the UI
+        # wants alphabetical regardless of cache order.
+        self._seed(carddb)
+        carddb.record_tag('otag:ramp', ['t-3'])
+        carddb.record_tag('art:dragon', ['t-1'])
+        assert [t['tag'] for t in carddb.list_cached_tags()] == [
+            'art:dragon', 'otag:ramp']
+
 
 class TestStoreAndLookup:
 

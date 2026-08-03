@@ -348,6 +348,14 @@ class CardDB:
         self.offline = offline
         self._session = session
         self._local = threading.local()
+        # Short TTL memo for the per-page-load catalog scans (distinct_sets,
+        # distinct_facets, counts_by_game, series_list, stats) — see
+        # _cached_query(). No invalidation hooks; a game's catalog only
+        # meaningfully changes when a cache/import run finishes, so a brief
+        # staleness window is an easy trade for not repeating full-table
+        # (often JSON-parsing) scans on every gallery click.
+        self._q_cache: dict[str, tuple[float, Any]] = {}
+        self._q_cache_lock = threading.Lock()
         with self._conn() as con:
             # Migrate BEFORE applying the schema: SCHEMA's index statements
             # reference columns that pre-multigame databases don't have yet.
@@ -391,6 +399,20 @@ class CardDB:
         if self._session is None:
             self._session = ScryfallSession()
         return self._session
+
+    _QUERY_CACHE_TTL = 30.0  # seconds
+
+    def _cached_query(self, key: str, compute):
+        """Return compute()'s result, memoized for _QUERY_CACHE_TTL seconds."""
+        now = time.monotonic()
+        with self._q_cache_lock:
+            hit = self._q_cache.get(key)
+            if hit is not None and now - hit[0] < self._QUERY_CACHE_TTL:
+                return hit[1]
+        value = compute()
+        with self._q_cache_lock:
+            self._q_cache[key] = (now, value)
+        return value
 
     def _conn(self) -> sqlite3.Connection:
         """Per-thread connection (SQLite objects can't cross threads).
@@ -619,6 +641,9 @@ class CardDB:
 
     def counts_by_game(self) -> dict[str, int]:
         """Return {game: count} for every game present in the DB."""
+        return self._cached_query('counts_by_game', self._counts_by_game_uncached)
+
+    def _counts_by_game_uncached(self) -> dict[str, int]:
         rows = self._conn().execute(
             'SELECT game, COUNT(*) AS n FROM cards GROUP BY game').fetchall()
         return {str(r['game']): int(r['n']) for r in rows}
@@ -700,6 +725,10 @@ class CardDB:
         Sorted by series name. Useful when several sets share one IP
         (e.g. Union Arena booster + starter of the same anime).
         """
+        return self._cached_query(
+            f'series_list:{game}', lambda: self._series_list_uncached(game))
+
+    def _series_list_uncached(self, game: str) -> list[dict]:
         groups: dict[str, dict] = {}
         for s in self.distinct_sets(game):
             series = self._series_name(s.get('name', ''), s.get('code', ''))
@@ -715,6 +744,11 @@ class CardDB:
         locally (accurate, offline, no live provider call). Returns
         {facet: [values]} for facets that have any values.
         """
+        return self._cached_query(
+            f'distinct_facets:{game}:{limit}',
+            lambda: self._distinct_facets_uncached(game, limit))
+
+    def _distinct_facets_uncached(self, game: str, limit: int) -> dict[str, list[str]]:
         game = (game or '').strip().lower()
         specs = self._FACET_SPECS.get(game)
         if not specs:
@@ -750,6 +784,11 @@ class CardDB:
         Scoped to a game when given, else across every game. Uses the
         denormalized set_code + set_name columns/json so it stays fast.
         """
+        return self._cached_query(
+            f'distinct_sets:{game}:{limit}',
+            lambda: self._distinct_sets_uncached(game, limit))
+
+    def _distinct_sets_uncached(self, game: Optional[str], limit: int) -> list[dict]:
         con = self._conn()
         where = ''
         params: list[Any] = []
@@ -1107,10 +1146,10 @@ class CardDB:
         return dict(row) if row else None
 
     def list_cached_tags(self) -> list[dict]:
-        """All cached tags, most recently refreshed first (for the UI)."""
+        """All cached tags, alphabetical by tag (for the UI)."""
         rows = self._conn().execute(
             'SELECT tag, label, count, cached_at FROM tag_cache '
-            'ORDER BY cached_at DESC, tag ASC').fetchall()
+            'ORDER BY tag ASC').fetchall()
         return [dict(r) for r in rows]
 
     def delete_tag(self, tag: str) -> bool:
@@ -1517,6 +1556,9 @@ class CardDB:
 
     def stats(self) -> dict:
         """Card/deck counts and bulk import status, for the UI."""
+        return self._cached_query('stats', self._stats_uncached)
+
+    def _stats_uncached(self) -> dict:
         con = self._conn()
         return {
             'cards': con.execute('SELECT COUNT(*) c FROM cards').fetchone()['c'],

@@ -161,7 +161,6 @@ document.addEventListener('DOMContentLoaded', () => {
     '': 'All games',
     {% for g, label in games.items() %}'{{ g }}': {{ label|tojson }},{% endfor %}
   };
-  const GAME_LS_KEY = 'proxyshop.cache.game';
   const panel = document.getElementById('cache-panel');
   if (!panel) return;
   const catalog = (panel.dataset.catalogGames || '').split(',').filter(Boolean);
@@ -596,7 +595,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function syncPanel() {
     const g = game.value;
-    try { localStorage.setItem(GAME_LS_KEY, g); } catch (e) { /* private mode */ }
     // Stop polling the previous game; refreshStatus restarts it if the newly
     // selected game is running.
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }

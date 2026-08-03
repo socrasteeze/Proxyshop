@@ -1271,7 +1271,15 @@ body.modal-open { overflow: hidden; }
 details#cached-tags[open] > .cached-tags-head::before { transform: rotate(90deg); }
 details#cached-tags[open] > .cached-tags-head { margin-bottom: .55rem; }
 .cached-tags-count { color: var(--muted); font-weight: 600; }
-.cached-tags-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.cached-tags-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: .4rem;
+  /* Two (or more) columns when there's room for them, one on narrow/mobile. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr));
+}
 .cached-tag {
   display: flex;
   align-items: center;

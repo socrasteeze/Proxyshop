@@ -522,7 +522,6 @@ function renderJobChips(container, jobs, onSelect, activeGame) {
 function wireCacheBadge() {
   const badge = document.getElementById('nav-cache-badge');
   if (!badge) return;
-  let timer = null;
 
   async function refresh() {
     try {
@@ -539,16 +538,33 @@ function wireCacheBadge() {
         badge.textContent = '';
         badge.removeAttribute('aria-label');
       }
-      if (body.any_running) {
-        if (!timer) timer = setInterval(refresh, 10000);
-      } else if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
     } catch (e) { /* badge is best-effort */ }
   }
 
+  // Always poll — a download can be started from the cache panel after this
+  // page loaded, and the badge should still catch it (not just runs that
+  // were already going when the page rendered).
   refresh();
+  setInterval(refresh, 10000);
+}
+
+/**
+ * Remember the Card library's last query string (game, search, sort, view…)
+ * in sessionStorage so switching to another tab and back restores it, while
+ * an actual page reload starts fresh. Two halves:
+ *  - gallery.html stamps the current query string on load (see its inline
+ *    script) and clears the stored value on a real reload.
+ *  - this runs on every page (including the gallery itself, harmlessly) and
+ *    repoints the "Card library" nav link at the remembered query string, so
+ *    clicking the tab returns exactly where you left off.
+ */
+function wireGalleryNavState() {
+  const GALLERY_STATE_KEY = 'proxyshop.gallery.state';
+  const link = document.querySelector('nav[aria-label="Main"] a[href^="/gallery"]');
+  if (!link) return;
+  let saved = null;
+  try { saved = sessionStorage.getItem(GALLERY_STATE_KEY); } catch (e) { /* private mode */ }
+  if (saved) link.href = '/gallery?' + saved;
 }
 
 /**
@@ -739,5 +755,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   wireJobDeleteButtons();
   wireCacheBadge();
+  wireGalleryNavState();
   wireCardPopover(document);
 });

@@ -2,6 +2,32 @@
 {% block title %}Card library — Proxyshop{% endblock %}
 {% block content %}
 
+<script>
+// Remember this page's filters (game, search, sort, view…) across tab swaps,
+// but let an actual reload reset to the plain /gallery defaults — even when
+// the current URL still carries the old filters, since an F5 on the Card
+// library tab is the explicit "start over" gesture. Runs first thing so a
+// restore/reset redirects before the rest of the page renders.
+(function () {
+  var KEY = 'proxyshop.gallery.state';
+  var search = location.search.replace(/^\?/, '');
+  try {
+    var nav = performance.getEntriesByType('navigation')[0];
+    if (nav && nav.type === 'reload') {
+      sessionStorage.removeItem(KEY);
+      if (search) location.replace('/gallery');
+      return;
+    }
+    if (search) {
+      sessionStorage.setItem(KEY, search);
+      return;
+    }
+    var saved = sessionStorage.getItem(KEY);
+    if (saved) location.replace('/gallery?' + saved);
+  } catch (e) { /* private mode / no sessionStorage */ }
+})();
+</script>
+
 <div class="panel">
   <div class="panel-header">
     <h2>Card library</h2>
@@ -198,8 +224,8 @@
         {% if c.art_count and c.art_count > 1 %}
         <span class="card-badge" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>
         {% endif %}
-        <img loading="lazy" width="336" height="468"
-             src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+        <img loading="lazy" decoding="async" width="336" height="468"
+             src="/api/cards/{{ c.id }}/image?kind=thumb" alt="{{ c.name }}">
       </a>
       <div class="full-info">
         <div class="full-title">
@@ -256,8 +282,8 @@
     {% for c in cards %}
     <a class="detail-row js-card-preview" href="/card/{{ c.id }}" data-card-id="{{ c.id }}">
       <span class="card-frame">
-        <img loading="lazy" width="88" height="123"
-             src="/api/cards/{{ c.id }}/image?kind=large" alt="">
+        <img loading="lazy" decoding="async" width="88" height="123"
+             src="/api/cards/{{ c.id }}/image?kind=thumb" alt="">
       </span>
       <span class="detail-body">
         <span class="detail-head">
@@ -289,8 +315,8 @@
       <span class="card-badge" title="{{ c.art_count }} printings">×{{ c.art_count }}</span>
       {% endif %}
       <span class="card-frame">
-        <img loading="lazy" width="336" height="468"
-             src="/api/cards/{{ c.id }}/image?kind=large" alt="{{ c.name }}">
+        <img loading="lazy" decoding="async" width="336" height="468"
+             src="/api/cards/{{ c.id }}/image?kind=thumb" alt="{{ c.name }}">
       </span>
       <span class="caption">{{ c.name }}<br>
         <span class="muted">{{ (c.set or '')|upper }} #{{ c.collector_number }}

@@ -29,6 +29,7 @@ from typing import Optional
 from fastapi import (
     Depends, FastAPI, File, Form, Header, HTTPException,
     Request, Response, UploadFile)
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -71,6 +72,9 @@ ALLOWED_ART_TYPES = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'}
 """
 
 app = FastAPI(title='Proxyshop Web', docs_url='/api/docs')
+# Gallery pages can carry hundreds of <option>/facet entries; images are
+# already compressed formats and skip this (below the size floor anyway).
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
@@ -86,7 +90,7 @@ RATE_LIMITS = {
     'submit': (20, 60),      # job submissions
     'import': (6, 60),       # deck imports (may fan out to Scryfall)
     'api': (120, 60),        # general API reads
-    'image': (300, 60),      # image serves (mostly cache hits; grids load many)
+    'image': (1200, 60),     # image serves (mostly cache hits; grids load many)
     'cache': (6, 60),        # start/stop full-TCG cache runs
     'update': (3, 300),      # deploy update requests (each rebuilds the image)
 }
@@ -438,11 +442,15 @@ def page_gallery(
     series = (series or '').strip()
     series_sets = next(
         (s['sets'] for s in series_options if s['series'] == series), None)
+    # Fetched once and reused below (for the series-scoped set picklist and
+    # the "does Series actually group sets" check) — this is a full-table
+    # scan, so avoid paying for it three times per page load.
+    all_sets = carddb.distinct_sets(game) if game else []
     # Set picklist is scoped to the selected series when one is active.
     if series and series_sets is not None:
-        set_options = [s for s in carddb.distinct_sets(game) if s['code'] in series_sets]
+        set_options = [s for s in all_sets if s['code'] in series_sets]
     else:
-        set_options = carddb.distinct_sets(game) if game else []
+        set_options = all_sets
 
     cards, total = carddb.list_gallery(
         game=game or None,
@@ -551,8 +559,7 @@ def page_gallery(
     facets = carddb.distinct_facets(game) if game else {}
     # Only surface the Series picker when it actually groups sets (i.e. some IP
     # spans multiple sets, as in Union Arena) — otherwise it just mirrors Set.
-    show_series = bool(game) and len(series_options) < sum(
-        1 for _ in carddb.distinct_sets(game))
+    show_series = bool(game) and len(series_options) < len(all_sets)
 
     # For the detail-bearing views, fold the stored card JSON into the compact
     # display fields the List / Full / Checklist templates render. The Full view
@@ -647,7 +654,7 @@ def api_cards_gallery(
             'game': c.get('game', 'mtg'),
             'art_count': c.get('art_count', 1),
             'thumb': (
-                f"/api/cards/{c['id']}/image?kind=large" if c.get('id') else None),
+                f"/api/cards/{c['id']}/image?kind=thumb" if c.get('id') else None),
         } for c in cards],
     }
 
@@ -1138,7 +1145,7 @@ def api_card_search(request: Request, q: str, limit: int = 30, game: str = 'mtg'
                 'released_at': c.get('released_at'),
                 'game': c.get('game') or game,
                 'thumb': (
-                    f"/api/cards/{c['id']}/image?kind=large" if c.get('id') else None),
+                    f"/api/cards/{c['id']}/image?kind=thumb" if c.get('id') else None),
                 'usd': (prices.get(c.get('id')) or {}).get('usd'),
                 'eur': (prices.get(c.get('id')) or {}).get('eur'),
             }
@@ -1224,7 +1231,7 @@ def _card_detail_payload(card_id: str) -> dict:
             'collector_number': p['collector_number'],
             'lang': p['lang'],
             'current': p['id'] == card_id,
-            'thumb': f"/api/cards/{p['id']}/image?kind=large",
+            'thumb': f"/api/cards/{p['id']}/image?kind=thumb",
             'page_url': f"/card/{p['id']}",
         }
         for p in carddb.list_art_group(card_id)]
@@ -1288,7 +1295,10 @@ def api_card_image(request: Request, card_id: str, kind: str = 'png'):
     card = carddb.get_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail='Card not in the local database')
-    path = images.ensure_image(carddb.session, card, kind, IMAGES_DIR, offline=OFFLINE)
+    if kind == 'thumb':
+        path = images.ensure_thumb(carddb.session, card, IMAGES_DIR, offline=OFFLINE)
+    else:
+        path = images.ensure_image(carddb.session, card, kind, IMAGES_DIR, offline=OFFLINE)
     if not path:
         return _placeholder_image(
             card.get('name', 'Card'),

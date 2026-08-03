@@ -44,6 +44,24 @@ class FakeSession:
         return Res()
 
 
+class BigFakeSession:
+    """Like FakeSession but serves a full-resolution-sized fake scan, so
+    thumbnail generation has something real to downscale."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        payload = _png_bytes(size=(1490, 2080))
+
+        class Res:
+            status_code = 200
+            def iter_content(self, chunk_size):
+                yield payload
+        return Res()
+
+
 class TestImageUri:
 
     def test_front_face_fallback_for_dfc(self):
@@ -116,6 +134,89 @@ class TestCachedImagePath:
     def test_missing_returns_none(self, tmp_path):
         assert images.cached_image_path(tmp_path, 'abc', 'png') is None
         assert images.cached_image_path(tmp_path, '', 'png') is None
+
+    def test_large_falls_back_to_cached_png(self, tmp_path):
+        # 'png' and 'large' are the same underlying scan at different
+        # resolutions — a request for one should be served by a cache built
+        # under the other rather than treated as a miss.
+        (tmp_path / 'abc-png.png').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'large') == tmp_path / 'abc-png.png'
+
+    def test_png_falls_back_to_cached_large(self, tmp_path):
+        (tmp_path / 'abc-large.jpg').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'png') == tmp_path / 'abc-large.jpg'
+
+    def test_own_kind_preferred_over_fallback(self, tmp_path):
+        (tmp_path / 'abc-large.jpg').write_bytes(b'x')
+        (tmp_path / 'abc-png.png').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'png') == tmp_path / 'abc-png.png'
+
+    def test_art_crop_has_no_cross_kind_fallback(self, tmp_path):
+        # art_crop/border_crop are genuinely different images from the full
+        # scan — no fallback should apply to them.
+        (tmp_path / 'abc-large.jpg').write_bytes(b'x')
+        (tmp_path / 'abc-png.png').write_bytes(b'x')
+        assert images.cached_image_path(tmp_path, 'abc', 'art_crop') is None
+
+
+class TestEnsureImageKindFallback:
+    """A cache built with one full-scan kind serves requests for the other
+    without an extra network call — this is what fixes the gallery serving
+    'kind=large' tiles against a cache the bulk downloader built as 'png'."""
+
+    def test_large_request_served_from_cached_png(self, tmp_path):
+        session = FakeSession()
+        card = _card_with_images()
+        images.ensure_image(session, card, 'png', tmp_path)
+        assert session.calls == 1
+        path = images.ensure_image(session, card, 'large', tmp_path)
+        assert path is not None
+        assert session.calls == 1  # no extra download
+
+    def test_png_request_served_from_cached_large(self, tmp_path):
+        session = FakeSession()
+        card = _card_with_images()
+        card['image_uris']['large'] = f'https://cards.example/{card["id"]}-large.jpg'
+        images.ensure_image(session, card, 'large', tmp_path)
+        assert session.calls == 1
+        path = images.ensure_image(session, card, 'png', tmp_path)
+        assert path is not None
+        assert session.calls == 1
+
+
+class TestEnsureThumb:
+
+    def test_generates_webp_from_cached_scan(self, tmp_path):
+        session = FakeSession()
+        card = _card_with_images()
+        images.ensure_image(session, card, 'png', tmp_path)
+        assert session.calls == 1
+        thumb = images.ensure_thumb(session, card, tmp_path)
+        assert thumb is not None and thumb.suffix == '.webp' and thumb.exists()
+        assert session.calls == 1  # derived locally, no extra download
+        assert images.ensure_thumb(session, card, tmp_path) == thumb
+
+    def test_downloads_source_when_uncached(self, tmp_path):
+        session = FakeSession()
+        card = _card_with_images()
+        thumb = images.ensure_thumb(session, card, tmp_path)
+        assert thumb is not None
+        assert session.calls == 1  # one download for the source scan
+
+    def test_offline_uncached_returns_none(self, tmp_path):
+        session = FakeSession()
+        card = _card_with_images()
+        assert images.ensure_thumb(session, card, tmp_path, offline=True) is None
+        assert session.calls == 0
+
+    def test_smaller_than_source(self, tmp_path):
+        card = _card_with_images()
+        # A generously large fake scan so the resize actually shrinks it.
+        big_session = BigFakeSession()
+        source = images.ensure_image(big_session, card, 'png', tmp_path)
+        thumb = images.ensure_thumb(big_session, card, tmp_path)
+        assert thumb is not None
+        assert thumb.stat().st_size < source.stat().st_size
 
 
 class TestSheetPdf:

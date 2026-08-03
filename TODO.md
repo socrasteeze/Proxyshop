@@ -31,7 +31,7 @@
   - [x] Add inline log viewer: `<details id="cache-log-wrap">` with `<pre id="cache-log">` below status
   - [x] Add collapsed `<details class="cache-advanced">` with "Start over from scratch" button
   - [x] Implement `refreshLog()` — fetch `/api/cache-game/{g}/log`, join lines, auto-scroll
-  - [x] Implement localStorage persist for game picklist (`proxyshop.search.game`)
+  - [x] ~~Implement localStorage persist for game picklist (`proxyshop.search.game`)~~ — superseded: the write was dead code (nothing ever read it); replaced by full gallery-state persistence in sessionStorage, see below
 
 - [x] **logs.html** (new)
   - [x] Create dedicated Logs page with full-height log viewer
@@ -62,7 +62,8 @@ Run: `python -m uvicorn web.server.app:app --port 8000`
 - [ ] Jobs strip shows running job; clicking chip switches picklist
 - [ ] Nav badge appears while running, clears when idle
 - [ ] Logs tab shows live-updating log with game switcher
-- [ ] Pokémon selected → hard refresh → still Pokémon (localStorage)
+- [x] Pokémon selected → switch to another tab and back to Card library → still Pokémon, download panel still shows it (`proxyshop.gallery.state` in sessionStorage, see `gallery.html`/`app.js` `wireGalleryNavState`)
+- [x] Pokémon selected → hard refresh (not tab swap) → resets to All games, as intended
 - [ ] Filter toggles → "Download cards" button doesn't move
 - [ ] "Start over" only in collapsed Advanced section; confirm warns about restart
 - [ ] Stop/resume works; errors appear in status + log

@@ -281,7 +281,7 @@ class TestJobSubmission:
         assert body['cards']
         card = body['cards'][0]
         assert card['id'] == 'thumb-1'
-        assert card['thumb'] == '/api/cards/thumb-1/image?kind=large'
+        assert card['thumb'] == '/api/cards/thumb-1/image?kind=thumb'
         assert card['game'] == 'mtg'
 
     def test_card_resolution_flag(self, appmod, client):
