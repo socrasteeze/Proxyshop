@@ -1,54 +1,177 @@
 <div align="center" markdown="1" style="font-size: large;">
 
 ![Showcase Image](src/img/cover-photo.png)
-Proxyshop is a Photoshop automation app that generates high-quality Magic the Gathering card renders. 
-Inspired by Chilli-Axe's [original Photoshop automation scripts](https://github.com/chilli-axe/mtg-photoshop-automation).
-If you need help with this app or wish to troubleshoot an issue, [please join our discord](https://discord.gg/magicproxies)!
 
+**Proxyshop** generates high-quality trading card proxies — either as a Photoshop
+automation app on Windows, or as a self-hosted web service you run on a NAS.
 
-![Photoshop](https://img.shields.io/badge/photoshop-CC_2017+-informational?style=plastic)
 ![Python](https://img.shields.io/badge/python-3.10_|_3.11_|_3.12-blue?style=plastic)
+![Photoshop](https://img.shields.io/badge/photoshop-CC_2017+-informational?style=plastic)
+![Docker](https://img.shields.io/badge/docker-self--hosted-blue?style=plastic)
 [![Discord](https://img.shields.io/discord/889831317066358815?style=plastic&label=discord&color=brightgreen)](https://discord.gg/magicproxies)
-![GitHub commit activity (branch)](https://img.shields.io/github/commit-activity/m/MrTeferi/Proxyshop?style=plastic&label=commits&color=brightgreen)
-[![Patreon](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fshieldsio-patreon.vercel.app%2Fapi%3Fusername%3Dmpcfill%26type%3Dpatrons&style=plastic&color=red&logo=none)](https://patreon.com/mpcfill)
-[![GitHub](https://img.shields.io/github/license/MrTeferi/Proxyshop?color=red&style=plastic)](https://github.com/MrTeferi/Proxyshop/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/socrasteeze/Proxyshop?color=red&style=plastic)](LICENSE.md)
 
 </div>
 
-# 🌐 Proxyshop Web (NAS)
+> **This is a fork.** Upstream [MrTeferi/Proxyshop](https://github.com/MrTeferi/Proxyshop)
+> is a Windows + Photoshop app for Magic: The Gathering. This fork keeps all of
+> that and adds a **self-hosted multi-game web service** under `web/` — a local
+> card library, a Photoshop-free rendering engine, deck tools, and print sheets.
+> If you only want the classic desktop app, jump to
+> [Desktop Proxyshop](#-desktop-proxyshop-photoshop--windows).
 
-This fork also ships a **self-hosted browser UI** under `web/`: run the FastAPI
-server on a NAS (or any Linux box), browse a local multi-game card library, and
-either **compose proxies on the NAS** (Pillow) or **queue Photoshop renders** on
-a Windows worker.
+---
 
-| Page | Path | What it does |
-|---|---|---|
-| **Editor (Make)** | `/` | Pick a printing, **replace art** (keep frame/details), pan/zoom, preview Compose PNG, or queue Photoshop |
-| **Card library** | `/gallery` | Browse + search cached cards (views, filters, popover, open in editor); online fallback; **Download & cache** panel (selective MTG/Pokémon filters, **multi-download queue**, stop/resume) + collapsible offline tag cache |
-| **Decks** | `/decks` | Import lists / Moxfield / Archidekt; ZIP of HQ scans; PDF sheets |
-| **Logs** | `/logs` | Live cache-run logs and job chips |
+# 🌐 Proxyshop Web
 
-_(`/search` is retired and redirects to the Card library.)_
-
-**Supported games (web):** MTG, Pokémon, Union Arena, Riftbound, Weiß Schwarz. Photoshop
-rendering covers MTG (and Pokémon when PSDs are installed). **Compose** works
-for MTG / Pokémon / Riftbound without Windows.
-
-Full setup, architecture, env vars, and API reference:
-
-→ **[docs/web-service-architecture.md](docs/web-service-architecture.md)**
-
-Quick local run:
+Run Proxyshop as a browser app on your NAS (or any Linux box). Browse a local
+multi-game card library that keeps working offline, then either **compose
+proxies on the NAS** with Pillow or **queue Photoshop renders** on a Windows
+machine.
 
 ```bash
 pip install -r web/server/requirements.txt
 python -m uvicorn web.server.app:app --port 8000
-# optional fake worker (no Photoshop):
+# optional fake worker, no Photoshop required:
 python -m web.worker.daemon --fake
 ```
 
-# 🛠️ Requirements
+Then open <http://localhost:8000>. Interactive API docs live at `/api/docs`.
+
+For NAS deployment, Tailscale remote access, the Windows worker setup, and the
+full API reference:
+
+→ **[docs/web-service-architecture.md](docs/web-service-architecture.md)**
+
+## Pages
+
+| Page | Path | What it does |
+|---|---|---|
+| **Editor** | `/` | Pick a printing, replace the art (keep frame + details), pan/zoom, toggle layers, set print bleed, preview a Compose PNG, or queue a Photoshop render. Blank cards and JSON import/export for fully custom cards. |
+| **Card library** | `/gallery` | Browse and search everything cached locally, with an online fallback that caches what it finds. Four views (grid / list / full / checklist), Scryfall-style sorts, facet filters, Series/IP filter, reprint grouping, and a card popover. Hosts the **Download & cache** panel and the offline tag cache. |
+| **Decks** | `/decks` | Import a decklist (plain / MTGA / MTGO) or a public Moxfield / Archidekt URL. Export a ZIP of high-quality scans or a printable PDF sheet. |
+| **Logs** | `/logs` | Live catalog-download logs, per game, with running-job chips. |
+| **Settings** | `/settings` | Build info, per-game cached-card counts, and a two-click **Update & restart** button. |
+
+_(`/search` is retired and redirects to the Card library.)_
+
+## Games
+
+| Game | Data source | Catalog download | Compose | Photoshop |
+|---|---|---|---|---|
+| **Magic: The Gathering** | [Scryfall](https://scryfall.com) (+ bulk data, MTGJSON prices) | Yes — filters required | Yes | **Yes** (default path) |
+| **Pokémon** | [pokemontcg.io](https://pokemontcg.io) (keyless; a free key raises limits) | Yes — filters required | Yes | Only if the worker has Pokémon PSDs |
+| **Riftbound** | [Riftcodex](https://riftcodex.com) + DotGG promos + official JA/KO names | Yes — full catalog | Yes | No |
+| **Union Arena** | Official [NA](https://www.unionarena-tcg.com/na/cardlist/) + JP cardlists | Yes — full catalog | No | No |
+| **Weiß Schwarz** | Official [EN](https://en.ws-tcg.com/cardlist/) + JP cardlists | Yes — full catalog | No | No |
+
+MTG and Pokémon require filters (set, type, rarity, art/frame flags, artist,
+year, Scryfall tags, regulation mark, …) so a download never tries to pull an
+entire game at once. The smaller games download their complete published
+catalog.
+
+> **Weiß Schwarz image quality.** No source publishes print-grade scans for this
+> game. Images resolve through official cardlist PNGs → DeckLog → Yuyutei →
+> EncoreDecks, preferring the official art even when Bushiroad stamps it
+> `SAMPLE`. Expect web-display resolution; print sheets will look softer than
+> the other games.
+
+## Two ways to render
+
+**Compose (NAS, no Windows).** A Pillow renderer that draws the card at
+750×1050 (≈63×88 mm at 300 DPI). It uses procedural frames tinted by color
+identity / Pokémon type / Riftbound domain, or real blank frame PNGs if you drop
+them into `web/shared/compose/frames/` (see that folder's
+[README](web/shared/compose/frames/README.md)). Handles art pan/zoom, layer
+toggles, and print bleed, and peels the art window out of a full card scan so
+official scans don't get double-framed. Works for MTG, Pokémon, and Riftbound.
+
+**Photoshop (Windows worker).** The classic Proxyshop pipeline, driven by a
+daemon that polls the server for jobs. The worker only makes **outbound** calls,
+so no ports open on the Windows box — and if it's offline, jobs just wait in the
+queue.
+
+```
+ Browser ──HTTPS──▶ NAS (Docker)                        Windows PC/VM
+                    ┌─────────────────────────┐          ┌─────────────────────────┐
+                    │ FastAPI web app         │          │ proxyshop-worker daemon │
+                    │ SQLite: jobs + card DB  │◀──poll───│ (in Proxyshop venv,     │
+                    │ /data: art, results,    │  outbound│  logged-in session)     │
+                    │        bulk card data   │──art────▶│ Photoshop via COM       │
+                    └─────────────────────────┘◀─result──└─────────────────────────┘
+```
+
+`render_mode` is `auto` by default: MTG goes to Photoshop when a worker is
+available, everything else composes on the NAS.
+
+## The local card library
+
+The server keeps a SQLite "offline Scryfall" at `/data/cards.db` that fills
+itself as you use it:
+
+- **Fetch-through caching** — anything looked up online is stored, so the
+  library grows while you browse. `PROXYSHOP_OFFLINE=1` disables live calls
+  entirely.
+- **Bulk import** — pull Scryfall's nightly bulk file for the whole MTG catalog
+  in one shot (`python -m web.server.manage bulk-download`).
+- **Catalog downloads** — mirror a game (or a filtered slice of one) into the DB
+  plus `/data/images/`, with checkpoints you can stop and resume. Each game has
+  its own queue, so you can stack several filter sets and let them run in
+  sequence while other games download in parallel.
+- **Offline tag cache** — Scryfall Tagger queries (`art:`, `otag:`, `function:`)
+  can't be resolved offline, so downloading with a tag saves its membership
+  locally and the search box keeps working without a connection.
+- **Image cache** — full scans download exactly once; grid tiles are served as
+  small derived WebP thumbnails, so browsing a big library stays fast on a LAN.
+
+Prices come from Scryfall on store, and optionally from MTGJSON
+(`python -m web.server.manage mtgjson-prices`) for TCGplayer USD and Cardmarket
+EUR.
+
+## Deployment
+
+`nas-update.sh` is the real deploy path — it needs no git on the NAS, pulls a
+tarball from GitHub, builds the Docker image, and swaps the container, polling
+`/api/health` before declaring success. `nas-watch.sh` runs host-side and
+executes update requests from the Settings page (the app can't rebuild the
+container it lives in). See the
+[architecture guide](docs/web-service-architecture.md) for the full walkthrough.
+
+Common environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PROXYSHOP_DATA_DIR` | `data` | Data volume root |
+| `PROXYSHOP_WORKER_TOKEN` | `dev-token` | Bearer token for `/api/worker/*` |
+| `PROXYSHOP_OFFLINE` | `0` | `1` = never call live providers |
+| `PROXYSHOP_MAX_UPLOAD_MB` | `50` | Art upload cap |
+| `PROXYSHOP_POKEMONTCG_KEY` | — | Optional pokemontcg.io key (raises rate limits) |
+| `PROXYSHOP_PROVIDER_INTERVAL` | `0.25` | Seconds between provider requests |
+
+Cache pacing (`PROXYSHOP_CACHE_PAGE_INTERVAL`, `_CARD_`, `_IMAGE_`,
+`_PROVIDER_`) and build stamps (`PROXYSHOP_BUILD_COMMIT` / `_BRANCH` / `_AT`)
+are documented in the architecture guide.
+
+## Tests
+
+The web suite is fully offline — no network, no Photoshop, no Windows.
+
+```bash
+pip install -r web/server/requirements.txt pytest
+python -m pytest web/tests
+```
+
+---
+
+# 🖥️ Desktop Proxyshop (Photoshop / Windows)
+
+Everything below is the classic app: a Photoshop automation tool that renders
+authentic Magic: The Gathering cards. Inspired by Chilli-Axe's
+[original Photoshop automation scripts](https://github.com/chilli-axe/mtg-photoshop-automation).
+If you need help or wish to troubleshoot an issue,
+[please join the discord](https://discord.gg/magicproxies)!
+
+## 🛠️ Requirements
 - Photoshop (2017-2024 Supported)
 - Windows (currently incompatible with Mac/Linux)
 - [The Photoshop templates](https://drive.google.com/drive/u/1/folders/1moEdGmpAJloW4htqhrdWZlleyIop_z1W) (Can be downloaded in the app)
@@ -63,9 +186,7 @@ python -m web.worker.daemon --fake
     - **Matrix Bold** — Required by Colorshifted template
     - **Mana** — For various additional card symbols
 
-<!-- TODO: Add citations for the source of various fonts. -->
-
-# 🚀 Setup Guide
+## 🚀 Setup Guide
 1. Download the [latest release](https://github.com/MrTeferi/MTG-Proxyshop/releases), extract it to a folder of your choice.
 2. Install the fonts included in the `fonts/` folder, please note that `Proxyglyph` may need to be updated in future releases.
 3. Place card arts for cards you wish to render in the `art/` folder. These arts should be named according to the card (see [Art File Naming](#-art-file-naming) for more info).
@@ -74,7 +195,7 @@ python -m web.worker.daemon --fake
 6. You can also drag art images or folders containing art images onto the Proxyshop app, Proxyshop will automatically start rendering those cards.
 7. During the render process the console at the bottom will display the current progress and prompt you if any failures occur.
 
-# 🎨 Art File Naming
+## 🎨 Art File Naming
 - Art file types currently supported are: `jpg`, `jpeg`, `jpf`, `png`, `tif`, and `webp`. **NOTE**: `webp` requires Photoshop 2022+.
 - Art files should be named after **real Magic the Gathering cards** and should be named as accurately as possible, e.g. `Damnation.jpg`.
 - Proxyshop supports several optional tags when naming your art files, to give you more control over how the card is rendered!
@@ -95,7 +216,7 @@ python -m web.worker.daemon --fake
     Brainstorm [SLD] {175}$My Creator Name.jpg
     ```
 
-# 💻 Using the Proxyshop GUI
+## 💻 Using the Proxyshop GUI
 
 ### Render Cards Tab
 - The main tab for rendering authentic Magic the Gathering cards.
@@ -136,7 +257,7 @@ python -m web.worker.daemon --fake
     - **Optimize**: Enables Pillow's automatic "optimize" flag. Lowers filesize by a small margin for no discernible downside. (**Recommended**: On)
     - **800 DPI**: Downscales card images above 800 DPI to a maximum of 800 DPI. Most Proxyshop templates are 1200 DPI which is much higher than anyone really needs. Most printing services do not print above 800 DPI. (**Recommended**: On)
 
-# 🐍 Setup Guide (Python Environment)
+## 🐍 Setup Guide (Python Environment)
 Setting up the Python environment for Proxyshop is intended for advanced users, contributors, and anyone who wants to 
 get their hands dirty making a plugin or custom template for the app! This guide assumes you already have Python installed.
 See the badge above for supported Python versions.
@@ -149,7 +270,7 @@ See the badge above for supported Python versions.
     ```
 2. Clone Proxyshop somewhere on your system, we'll call this the ***root directory***.
     ```bash
-    git clone https://github.com/MrTeferi/Proxyshop.git
+    git clone https://github.com/socrasteeze/Proxyshop.git
     ```
 3. Navigate to the **root directory** and install the project environment.
     ```bash
@@ -169,20 +290,12 @@ See the badge above for supported Python versions.
     ```
 7. Refer to the [usage guide](#-using-the-proxyshop-gui) for navigating the GUI.
 
-# 💾 Download Templates Manually
+## 💾 Download Templates Manually
 If you wish to download the templates manually, visit [this link](https://drive.google.com/drive/u/1/folders/1sgJ3Xu4FabxNgDl0yeI7OjDZ7fqlI4p3). These archives must be extracted to the `/templates` 
 directory. The archives found within the **Investigamer** and **SilvanMTG** drive folders must be extracted to 
 `/plugins/Investigamer/templates` and `/plugins/SilvanMTG/templates` respectively.
 
-
-# 💌 How can I support Proxyshop?
-Feel free to [join our discord](http://discord.gg/magicproxies) and participate in the `#Proxyshop` channel where we are constantly brainstorming and 
-testing new features, dropping beta releases, and sharing new plugins and templates. Also, please consider supporting 
-[our Patreon](http://patreon.com/mpcfill) which pays for S3 + Cloudfront hosting of Proxyshop templates and allows us the freedom to work on the app, 
-as well as other applications like MPC Autofill, MTG Art Downloader, and more! If Patreon isn't your thing, you can also buy 
-me a coffee [via Paypal](https://www.paypal.com/donate/?hosted_button_id=D96NBC6ZAJ8H6). Thanks so much to our awesome supporters!
-
-# ❓ FAQ
+## ❓ FAQ
 <details markdown="1">
 <summary style="font-size: large;">
   How do I change the set symbol to something else?
@@ -288,8 +401,18 @@ In your proxyshop directory, look for a folder named `logs`, inside that folder 
 
 </details>
 
+---
+
+# 💌 Supporting Proxyshop
+Feel free to [join the discord](http://discord.gg/magicproxies) and participate in the `#Proxyshop` channel where we are constantly brainstorming and 
+testing new features, dropping beta releases, and sharing new plugins and templates. Also, please consider supporting 
+[the Patreon](http://patreon.com/mpcfill) which pays for S3 + Cloudfront hosting of Proxyshop templates and allows the freedom to work on the app, 
+as well as other applications like MPC Autofill, MTG Art Downloader, and more! If Patreon isn't your thing, you can also buy 
+MrTeferi a coffee [via Paypal](https://www.paypal.com/donate/?hosted_button_id=D96NBC6ZAJ8H6). Thanks so much to the awesome supporters!
+
 # ✨ Credits
-- Our [amazing Patreon supporters](https://www.patreon.com/mpcfill) who literally keep this project going.
+- [MrTeferi](https://github.com/MrTeferi/Proxyshop), author of the upstream Proxyshop this fork is built on.
+- The [amazing Patreon supporters](https://www.patreon.com/mpcfill) who literally keep this project going.
 - Chilli Axe for his outstanding [MTG Photoshop Automation](https://github.com/chilli-axe/mtg-photoshop-automation) project that Proxyshop was inspired by, and for producing many of the base PSD templates that have been modified to work with Proxyshop.
 - Additional template and asset support from:
     - SilvanMTG
@@ -305,6 +428,7 @@ In your proxyshop directory, look for a folder named `logs`, inside that folder 
 - Andrew Gioia for his various font projects which have been of use for Proxyshop in the past.
 - John Prime, Haven King, and members of [CCGHQ](https://www.slightlymagic.net/forum/viewtopic.php?f=15&t=7010) for providing expansion symbol SVG's.
 - Hal and the other contributors over at [Photoshop Python API](https://github.com/loonghao/photoshop-python-api).
+- Card data from [Scryfall](https://scryfall.com), [pokemontcg.io](https://pokemontcg.io), [Riftcodex](https://riftcodex.com), and the official Union Arena and Weiß Schwarz cardlists.
 - Wizards of the Coast and all the talented artists who make Magic the Gathering a reality.
 - Countless others who have provided help and other assets to the community that made various features possible.
 - All contributors to the code base.

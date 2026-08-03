@@ -10,19 +10,50 @@ Desktop Proxyshop release history continues below.
   bleed; queue parity via `card_json` + `art_transform`
 - **Compose**: MTG / Pokémon / Riftbound Pillow renderer; symbol expansion;
   custom-art vs full-scan handling
-- **Card library** (`/gallery`): views, arts unique/combine, per-page, card popover
-- **Offline cache UI**: Download/Resume/Stop header, inline logs, job chips,
-  Logs page, nav badge; APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
+- **Card library** (`/gallery`): the single browse surface — grid / list / full /
+  checklist views, Scryfall-style sorts with direction, facet filters
+  (type / supertype / subtype / domain / rarity), Series/IP filter, arts
+  unique/combine, per-page size, card popover, and a Prints panel in Full view.
+  Search was consolidated into it; `/search` now redirects here
+- **Card library**: filters (game, search, sort, view) persist across tab swaps
+  via `sessionStorage` and reset on a page reload, so the download panel keeps
+  showing an in-progress job when you navigate away and back
+- **Card library**: gallery tiles serve small derived WebP thumbnails, and the
+  image cache treats `png`/`large` as interchangeable so an already-downloaded
+  scan is never re-fetched; catalog scans are memoized per request
+- **Offline cache UI**: Start/Resume/Stop download, job chips, per-game download
+  queue with Clear pending, collapsible offline tag cache, and Advanced options.
+  The live log moved to the **Logs** page; the nav badge lives on Card library.
+  APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
+- **Offline tag cache**: Scryfall Tagger queries (`art:`, `otag:`, `function:`)
+  cached locally so tag searches resolve without a connection; listed
+  alphabetically with refresh/remove
 - **Selective cache**: MTG/Pokémon filters; Riftbound via Riftcodex; Union Arena
   and Weiß Schwarz via official cardlists
-- **Weiß Schwarz**: EN + JP cardlist provider with a DeckLog → official →
-  Yuyutei → EncoreDecks image chain (search/image only; no print-grade source
-  exists for this game)
-- **Search / Decks / Sheets**: multi-game browse, deck import, HQ ZIP, PDF sheets
+- **Weiß Schwarz**: EN + JP cardlist provider with a scraped → official cardlist
+  → DeckLog → Yuyutei → EncoreDecks image chain, preferring official art even
+  when stamped `SAMPLE` (search/image only; no print-grade source exists for
+  this game)
+- **Settings page** (`/settings`): build facts, per-game cached-card counts, and
+  a two-click **Update & restart** button backed by a host-side watcher
+- **Decks / Sheets**: deck import (plain / MTGA / MTGO / Moxfield / Archidekt),
+  HQ scan ZIP with manifest, PDF proxy sheets
+
+### Fix
+
+- **Providers**: Weiß Schwarz catalog scrape repaired for the redesigned EN/JP
+  endpoints; transient 5xx retries
+- Branding: use the original Proxyshop logo for the web favicon and header icon
+
+### Tools
+
+- **`probe-game`**: read-only diagnostic that reports what a scraped provider
+  actually serves, so "cached 0 cards" can be debugged from evidence
 
 ### Docs
 
-- README: Proxyshop Web (NAS) overview
+- README: rewritten around the web service — pages, games, both rendering
+  paths, the local card library, deployment, and env vars
 - `docs/web-service-architecture.md`: Make, gallery, cache UI, compose, APIs
 
 ---

@@ -6,10 +6,11 @@ runs a **Compose** engine (Pillow) so MTG / Pokémon / Riftbound proxies can be
 previewed and downloaded without Windows.
 
 Pages: **Editor** (`/`), **Card library** (`/gallery`), **Decks** (`/decks`),
-**Logs** (`/logs`). The Card library is the single search/browse surface: local
-browse with online fallback, plus the **Download & cache** tool and the offline
-tag cache. The old `/search` page is retired and 307-redirects to `/gallery`.
-See the [README Web section](../README.md#-proxyshop-web-nas) for a short
+**Logs** (`/logs`), **Settings** (`/settings`). The Card library is the single
+search/browse surface: local browse with online fallback, plus the **Download &
+cache** tool and the offline tag cache. The old `/search` page is retired and
+307-redirects to `/gallery`.
+See the [README Web section](../README.md#-proxyshop-web) for a short
 overview.
 
 ## Why this shape?
@@ -74,14 +75,14 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   Moxfield / Archidekt URL on the *Decks* page — every card is resolved
   (cache first, then Scryfall's batch endpoint at 75 cards per request) and
   saved as a named deck.
-- **Browser search with live fallback**: the *Card Search* page and the
-  render form's autocomplete search the local DB first and fall back to a
-  live Scryfall search when nothing matches — fallback results are cached,
-  so the database grows with every search.
+- **Browser search with live fallback**: the *Card library* and the render
+  form's autocomplete search the local DB first and fall back to a live
+  Scryfall search when nothing matches — fallback results are cached, so the
+  database grows with every search.
 - **High-quality images**: full-card scans (745×1040 PNG) and art crops are
   fetched on demand and cached under `/data/images/` — each image downloads
   exactly once.
-- **Multi-game search ("self-hosted Scryfall")**: the *Card Search* page is a
+- **Multi-game search ("self-hosted Scryfall")**: the *Card library* is a
   visual card browser — pick a game, search, see a grid of card images, click
   through to a detail view with the full-size scan, attributes, prices, and
   HQ download buttons. Supported games: **MTG** (Scryfall),
@@ -106,12 +107,13 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   **Weiß Schwarz image quality caveat.** There is no Scryfall equivalent for
   this game — no source publishes print-grade scans. Card codes map onto the
   official art path (`CCS/WX01-001` → `/cardlist/cardimages/CCS_WX01_001.png`),
-  and `_ws_best_image()` walks **DeckLog → official cardlist → Yuyutei →
-  EncoreDecks**, taking the first hit. The first two tiers are free (an
-  in-memory DeckLog index plus a constructed URL), so the probing tiers only
-  run for cards the official site has no art for. Expect web-display
-  resolution, well under the 745×1040 a 300 DPI proxy wants; print sheets will
-  look soft until an upscaling pass exists. Art here is licensed from many
+  and `_ws_best_image()` walks **scraped URL → official cardlist → DeckLog →
+  Yuyutei → EncoreDecks**, taking the first hit. The official cardlist tier is
+  gated behind a `_ws_url_exists()` HEAD probe and is deliberately preferred
+  even when Bushiroad stamps the art `SAMPLE`, because it still outresolves the
+  aggregator fallbacks. Expect web-display resolution, under the 745×1040 a
+  300 DPI proxy wants; print sheets will look softer than the other games until
+  an upscaling pass exists. Art here is licensed from many
   separate anime rights holders on top of Bushiroad's own — a wider rights
   surface than the other games in this repo.
 - **Full TCG cache (NAS)**: small games can be mirrored into the local DB +
@@ -177,14 +179,26 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   (no key) plus DotGG Arcane Box promos. Full MTG dumps still use
   `manage bulk-download`.
 
-  **Cache UI:** Search → Offline cache shows a header with Download / Resume /
-  Stop, an inline run log, job chips for other games, and Advanced → Start over.
-  The nav **Search** link shows a badge while any cache job is running; the
-  **Logs** page (`/logs`) is a full live viewer with game switcher. APIs:
-  `GET /api/cache-jobs`, `GET /api/cache-game/{game}/log`.
-- **Card library (`/gallery`)**: browse the local DB with list/grid views,
-  unique-vs-combine arts, per-page size, and a card popover (detail + open in
-  editor). Cross-game FTS search is shared with Search.
+  **Cache UI:** the **Download & cache** panel (`templates/_cache_tool.html`,
+  included by the Card library) has **Start download / Resume download / Stop
+  download**, per-game filter fields, job chips for other games, a **Queue**
+  sub-panel (with *Clear pending*), the collapsible **Offline tag cache**, and
+  **Advanced options → Start new download with these filters (discard saved)**.
+  There is no inline log — the panel links to the **Logs** page (`/logs`), a
+  full live viewer with a game switcher. The nav **Card library** link shows a
+  badge while any cache job is running. APIs: `GET /api/cache-jobs`,
+  `GET /api/cache-game/{game}/log`.
+- **Card library (`/gallery`)**: the single browse surface for the local DB.
+  Four views (`grid` / `list` / `full` / `checklist`), Scryfall-style sort menu
+  with direction (full price/mana/EDHREC set for MTG, reduced for other games),
+  `arts=unique|combine` reprint grouping, per-page size, and a card popover
+  (detail + open in editor). Facet dropdowns (type / supertype / subtype /
+  domain / rarity) are built from what is actually cached, and a **Series / IP**
+  picker appears only when a series spans multiple sets. The Full view adds a
+  Scryfall-style **Prints** panel. A game-scoped query that finds nothing
+  locally falls back to the live provider, caches the hits, and re-queries;
+  tag queries never fetch live and instead offer to cache the tag. Filters
+  persist across tab swaps via `sessionStorage`; a page reload resets them.
 - **Art-less rendering**: submitting an MTG render job without an art upload
   automatically uses the card's Scryfall art crop as the render input.
   Compose-mode Pokémon/Riftbound jobs can use the cached HQ scan as art when
@@ -218,7 +232,8 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   requests, honoring `429 Retry-After`, bulk files preferred over API calls.
 - Set `PROXYSHOP_OFFLINE=1` to forbid all live Scryfall calls.
 - **Prices**: every cached card's Scryfall prices (USD/EUR) are stored
-  automatically and shown on the search page and as estimated deck values.
+  automatically and shown in the Card library, on the card detail page, and as
+  estimated deck values.
   For richer aggregated paper prices (TCGplayer/Cardmarket via
   [MTGJSON](https://mtgjson.com)), run:
 
@@ -253,8 +268,9 @@ real hostnames, IPs, passwords, or tokens into README/CHANGELOG commits.
 
 ### API hygiene
 
-- Rate limits on submissions (20/min), deck imports (6/min) and API reads
-  (120/min) per client, with `Retry-After` on 429.
+- Per-client sliding-window rate limits, with `Retry-After` on 429:
+  submissions 20/min, deck imports 6/min, API reads 120/min, image serves
+  1200/min, cache start/stop 6/min, update requests 3 per 5 min.
 - Upload size cap (default 50MB, `PROXYSHOP_MAX_UPLOAD_MB`), art file-type
   allowlist, strict pydantic validation.
 - Worker endpoints require a bearer token (`PROXYSHOP_WORKER_TOKEN`).
@@ -489,22 +505,37 @@ Interactive docs live at `/api/docs`. Key endpoints:
 |---|---|---|---|
 | `/api/jobs` | POST | — | Submit render job (multipart: fields + optional art, `card_json`, `art_transform`) |
 | `/api/jobs/{id}` | GET | — | Job status/detail |
+| `/api/jobs/{id}` | DELETE | — | Delete a job and its files |
 | `/api/jobs/{id}/result` | GET | — | Download rendered PNG |
 | `/api/compose` | POST | — | Live Compose preview/download (card_json + optional art / art_transform / bleed_px) |
 | `/api/templates` | GET | — | Template options (from worker handshake) |
 | `/api/cards/search?q=` | GET | — | Local card DB search (+ live fallback) |
 | `/api/cards/gallery` | GET | — | Card library listing |
+| `/api/cards/{id}/detail` | GET | — | Card detail JSON for the popover |
+| `/api/cards/{id}/image?kind=` | GET | — | Card image (`png`, `large`, `art_crop`, `border_crop`, `thumb`) |
+| `/api/decks` | GET | — | List saved decks |
+| `/api/decks/{id}` | GET | — | One deck with its card lines |
 | `/api/decks/import` | POST | — | Import decklist text or Moxfield/Archidekt URL |
 | `/api/decks/{id}/images` | GET | — | ZIP of HQ card scans + decklist manifest |
 | `/api/sheets` | POST | — | Compile proxy sheet PDF (deck_id or text, paper=letter/a4) |
 | `/api/sheets/{id}` | GET | — | Download compiled PDF |
 | `/api/cache-game/{game}` | GET | — | Offline-cache status for one game |
-| `/api/cache-game/{game}/start` | POST | — | Start/resume selective or full cache |
+| `/api/cache-game/{game}/options` | GET | — | Filter picker options (sets, rarities, …) |
+| `/api/cache-game/{game}/start` | POST | — | Enqueue a download with the given filters |
+| `/api/cache-game/{game}/resume` | POST | — | Resume the paused queue for a game |
 | `/api/cache-game/{game}/stop` | POST | — | Cooperative stop |
+| `/api/cache-game/{game}/queue/remove` | POST | — | Drop one queued item |
+| `/api/cache-game/{game}/queue/clear` | POST | — | Clear pending items (keeps the active one) |
 | `/api/cache-game/{game}/log` | GET | — | Recent cache-run log lines |
 | `/api/cache-jobs` | GET | — | Status for all catalog-game cache jobs |
+| `/api/tags` | GET | — | Cached offline Scryfall tags |
+| `/api/tags/delete` | POST | — | Forget a cached tag (cards stay) |
+| `/api/update` | GET | — | Update/watcher status |
+| `/api/update` | POST | — | Request a host-side update & restart |
 | `/api/worker/hello` | POST | Bearer | Capabilities handshake |
+| `/api/worker/heartbeat` | POST | Bearer | Worker liveness ping |
 | `/api/worker/jobs/next?wait=25` | GET | Bearer | Long-poll claim |
 | `/api/worker/jobs/{id}/art` | GET | Bearer | Download job art |
+| `/api/worker/jobs/{id}/status` | POST | Bearer | Report interim status (e.g. `rendering`) |
 | `/api/worker/jobs/{id}/result` | POST | Bearer | Report result (+ PNG upload) |
 | `/api/health` | GET | — | Health/stats |
