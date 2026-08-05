@@ -104,6 +104,45 @@ queue.
 `render_mode` is `auto` by default: MTG goes to Photoshop when a worker is
 available, everything else composes on the NAS.
 
+## Search syntax
+
+Plain words match anywhere in the card — name, type line, rules text, artist,
+and the rest — **including inside a word**, so `bolt` finds *Thunderbolt*.
+Every term must match, so `dragon flying` narrows rather than widens.
+
+Field operators scope a term to one field. Quote values with spaces:
+
+| Operator | Also written | Matches | Example |
+|---|---|---|---|
+| `name:` | `n:` | Card name | `name:bolt` |
+| `t:` | `type:` `types:` | Type line | `t:creature` |
+| `o:` | `text:` `rules:` `oracle:` | Rules text | `o:"draw a card"` |
+| `r:` | `rarity:` | Rarity | `r:mythic` |
+| `set:` | `s:` `e:` `edition:` | Set code or name | `set:neo` |
+| `c:` | `color:` `colors:` `identity:` | Colour | `c:r` |
+| `a:` | `artist:` | Illustrator | `a:rahn` |
+| `mana:` | `cost:` `cmc:` | Mana cost | `mana:{2}{u}` |
+| `flavor:` | `ft:` | Flavour text | `flavor:dragon` |
+| `st:` | `super:` `supertype:` | Supertype | `supertype:trainer` |
+| `sub:` | `subtype:` `subtypes:` | Subtype | `subtype:vmax` |
+| `domain:` | — | Domain (Riftbound) | `domain:fury` |
+| `hp:` | — | Hit points (Pokémon) | `hp:120` |
+| `num:` | `number:` `cn:` `collector:` | Collector number | `num:161` |
+
+**Available operators differ per game** — Pokémon has `supertype:`/`hp:` but no
+`c:`/`mana:`; Union Arena and Weiß Schwarz publish only name, set and number.
+The Card library shows the exact set for the selected game: click the **?**
+next to the search box, or just start typing a field name and the box suggests
+the operators (and, for facet-backed fields like rarity, the values).
+
+MTG also supports Scryfall Tagger operators — `art:dragon`, `otag:removal`,
+`function:ramp` — but only for tags you have downloaded, since those tags live
+in Scryfall's index rather than in the card data. Download one under
+**Download & cache**, and it resolves offline from then on.
+
+An unrecognized `word:value` is searched as plain text, so a stray colon never
+breaks a query. Negation (`-t:creature`) is not supported locally.
+
 ## The local card library
 
 The server keeps a SQLite "offline Scryfall" at `/data/cards.db` that fills

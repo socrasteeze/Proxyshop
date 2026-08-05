@@ -105,6 +105,16 @@ _SEARCH_FIELDS: dict[str, dict[str, str]] = {
                "COALESCE(json_extract(json,'$.set_name'),''))",
         'number': "lower(COALESCE(collector_number,''))",
     },
+    # The official cardlists publish only a code, a name and an image, so these
+    # are genuinely all the fields there are. Listed explicitly rather than
+    # letting the game fall through to the MTG set, which would advertise
+    # t:/o:/c: operators that can never match a Weiß Schwarz card.
+    'weiss-schwarz': {
+        'name': "lower(name)",
+        'set': "lower(COALESCE(set_code,'') || ' ' || "
+               "COALESCE(json_extract(json,'$.set_name'),''))",
+        'number': "lower(COALESCE(collector_number,''))",
+    },
 }
 
 # Cross-game ('All games') field set: unions each game's json paths so a
@@ -281,6 +291,69 @@ def build_where(parsed: ParsedQuery, game: Optional[str]) -> tuple[str, list]:
     if not clauses:
         return '1=1', []
     return ' AND '.join(clauses), params
+
+
+# Human-facing blurb per canonical field. Kept beside _SEARCH_FIELDS so the
+# help text and the parser can never disagree about what exists.
+_FIELD_HELP: dict[str, tuple[str, str]] = {
+    'name': ('Card name', 'name:bolt'),
+    'type': ('Type line', 't:creature'),
+    'oracle': ('Rules text', 'o:"draw a card"'),
+    'rarity': ('Rarity', 'r:mythic'),
+    'set': ('Set code or set name', 'set:neo'),
+    'color': ('Colour(s)', 'c:r'),
+    'artist': ('Illustrator', 'a:rahn'),
+    'mana': ('Mana cost', 'mana:{2}{u}'),
+    'flavor': ('Flavour text', 'flavor:dragon'),
+    'supertype': ('Supertype (Pokémon / Trainer / Energy)', 'supertype:trainer'),
+    'subtype': ('Subtype', 'subtype:vmax'),
+    'domain': ('Domain (Riftbound)', 'domain:fury'),
+    'hp': ('Hit points (Pokémon)', 'hp:120'),
+    'number': ('Collector number', 'num:161'),
+}
+
+# Reverse the alias map once so each field can list how else it can be spelled.
+def _aliases_for(field: str) -> list[str]:
+    out = [a for a, canon in _FIELD_ALIASES.items() if canon == field]
+    # Shortest first ('t' before 'type' before 'types') — that's the order a
+    # user most likely wants to type.
+    return sorted(set(out), key=lambda a: (len(a), a))
+
+
+def field_help(game: Optional[str]) -> list[dict]:
+    """Searchable fields for a game, as UI-ready help rows.
+
+    Returns [{field, aliases, description, example}], ordered the way the help
+    panel and the syntax typeahead should present them. Derived from
+    _SEARCH_FIELDS, so a field that isn't actually searchable for this game is
+    never advertised.
+    """
+    known = _SEARCH_FIELDS[_resolve_game(game)]
+    rows = []
+    for field in known:
+        desc, example = _FIELD_HELP.get(field, (field.title(), f'{field}:…'))
+        rows.append({
+            'field': field,
+            'aliases': _aliases_for(field),
+            'description': desc,
+            'example': example,
+        })
+    return rows
+
+
+def tag_help() -> list[dict]:
+    """The Scryfall Tagger operators (MTG only, offline-cache backed)."""
+    return [
+        {'field': 'art', 'aliases': ['art', 'atag', 'arttag'],
+         'description': 'Scryfall art tag — what is depicted',
+         'example': 'art:dragon'},
+        {'field': 'otag', 'aliases': ['otag', 'oracletag'],
+         'description': 'Scryfall oracle tag — what the card does',
+         'example': 'otag:removal'},
+        {'field': 'function', 'aliases': ['function', 'func'],
+         'description': 'Scryfall function tag',
+         'example': 'function:ramp'},
+    ]
 
 
 def name_rank_sql(text: str) -> tuple[str, list]:

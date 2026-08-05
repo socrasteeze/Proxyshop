@@ -179,3 +179,46 @@ class TestFieldSearch:
         self._seed_riftbound(carddb)
         cards, total = carddb.list_gallery(q='t:unit')  # no game → cross-game
         assert total == 1 and cards[0]['id'] == 'rb-1'
+
+
+class TestFieldHelp:
+    """The help panel and the syntax typeahead are generated from the parser's
+    own field map, so they can never advertise an operator that doesn't work."""
+
+    def test_only_lists_fields_the_game_can_search(self):
+        mtg = {f['field'] for f in cardquery.field_help('mtg')}
+        assert {'type', 'oracle', 'color', 'mana'} <= mtg
+        # Pokémon has no colour/mana; Weiss Schwarz has almost nothing.
+        pkm = {f['field'] for f in cardquery.field_help('pokemon')}
+        assert 'supertype' in pkm and 'color' not in pkm and 'mana' not in pkm
+        ws = {f['field'] for f in cardquery.field_help('weiss-schwarz')}
+        assert ws == {'name', 'set', 'number'}
+
+    def test_weiss_schwarz_does_not_fall_back_to_mtg_fields(self):
+        # It used to resolve to the MTG field set, advertising t:/o:/c:
+        # operators that can never match a Weiss Schwarz card.
+        ws = {f['field'] for f in cardquery.field_help('weiss-schwarz')}
+        assert 'type' not in ws and 'oracle' not in ws
+
+    def test_every_advertised_alias_actually_parses(self):
+        for game in ('mtg', 'pokemon', 'riftbound', 'union-arena', 'weiss-schwarz'):
+            for row in cardquery.field_help(game):
+                for alias in row['aliases']:
+                    parsed = cardquery.parse_query(f'{alias}:x', game)
+                    assert parsed.fields == [(row['field'], 'x')], (
+                        f'{alias}: did not parse as {row["field"]} for {game}')
+
+    def test_every_example_parses_as_a_field_query(self):
+        for game in ('mtg', 'pokemon', 'riftbound'):
+            for row in cardquery.field_help(game):
+                parsed = cardquery.parse_query(row['example'], game)
+                assert parsed.fields, f'example {row["example"]!r} parsed as free text'
+
+    def test_cross_game_help_is_the_shared_subset(self):
+        allg = {f['field'] for f in cardquery.field_help('')}
+        assert 'name' in allg and 'mana' not in allg
+
+    def test_tag_help_aliases_are_recognized_tag_operators(self):
+        for row in cardquery.tag_help():
+            for alias in row['aliases']:
+                assert cardquery.has_tag_op(f'{alias}:thing')

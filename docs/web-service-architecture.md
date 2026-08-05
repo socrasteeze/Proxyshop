@@ -218,6 +218,17 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   full live viewer with a game switcher. The nav **Card library** link shows a
   badge while any cache job is running. APIs: `GET /api/cache-jobs`,
   `GET /api/cache-game/{game}/log`.
+- **Search syntax + typeahead**: `cardquery._SEARCH_FIELDS` is the single source
+  of truth for which operators exist per game. `field_help(game)` / `tag_help()`
+  turn that map into UI rows, which `page_gallery` passes to the template for
+  both the **?** reference panel and the in-box syntax typeahead
+  (`wireSearchSyntaxHelp` in `app.js`). Because the help is generated from the
+  parser's own map, it cannot advertise an operator the game doesn't support —
+  Pokémon never shows `c:`/`mana:`, and Union Arena / Weiß Schwarz show only
+  name/set/number. The typeahead completes operators before the colon and,
+  for facet-backed fields, values after it (reusing the same `distinct_facets`
+  lists the dropdowns render). Tab or Enter accepts, Escape dismisses.
+  See the [README](../README.md#search-syntax) for the user-facing table.
 - **Card library (`/gallery`)**: the single browse surface for the local DB.
   Four views (`grid` / `list` / `full` / `checklist`), Scryfall-style sort menu
   with direction (full price/mana/EDHREC set for MTG, reduced for other games),

@@ -1248,6 +1248,60 @@ body.modal-open { overflow: hidden; }
   margin-top: .85rem;
 }
 
+/* Search syntax: the ? button next to the library search box, its reference
+   panel, and the in-box operator/value typeahead. */
+.label-with-help { display: flex; align-items: center; gap: .35rem; }
+.label-with-help .typeahead,
+.label-with-help > input { flex: 1 1 auto; min-width: 0; }
+.syntax-help-btn {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: .8rem;
+  font-weight: 700;
+  line-height: 1;
+  background: #3a3d46;
+  color: var(--text);
+  cursor: pointer;
+}
+.syntax-help-btn[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.syntax-help {
+  margin-top: .8rem;
+  padding: .8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .03);
+}
+.syntax-help-head { display: flex; align-items: baseline; gap: .5rem; }
+.syntax-help-lede { margin: .35rem 0 .7rem; font-size: .85rem; }
+.syntax-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.syntax-table th {
+  text-align: left;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  padding: .2rem .5rem .3rem 0;
+  font-weight: 700;
+}
+.syntax-table td { padding: .22rem .5rem .22rem 0; vertical-align: top; }
+.syntax-table code {
+  font-size: .8rem;
+  padding: .05rem .3rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .06);
+}
+/* Wide tables must scroll inside the panel, never widen the page. */
+@media (max-width: 640px) {
+  .syntax-help { overflow-x: auto; }
+  .syntax-table { min-width: 30rem; }
+}
+.syntax-drop .typeahead-item { align-items: center; }
+
 /* Offline tag cache list (under the MTG cache filters) */
 #cached-tags { margin-top: 1rem; }
 .cached-tags-head {

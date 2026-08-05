@@ -624,6 +624,11 @@ def page_gallery(
         'search_source': search_source,
         'tag_query': tag_query,
         'tag_uncached': tag_uncached,
+        # Search syntax for the help panel + the in-box syntax typeahead.
+        # Generated from the parser's own field map so it can never advertise
+        # an operator this game doesn't actually support.
+        'search_fields': cardquery.field_help(game),
+        'search_tags': cardquery.tag_help() if game == 'mtg' else [],
     })
 
 

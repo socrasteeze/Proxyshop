@@ -549,6 +549,143 @@ function wireCacheBadge() {
 }
 
 /**
+ * Search-syntax typeahead for the Card library box.
+ *
+ * Completes the token you're currently typing — field operators while you're
+ * before the colon, and known values (from the same facet lists the dropdowns
+ * use) after it. Field list comes from the server, generated from the query
+ * parser's own map, so it only ever offers operators that work for the
+ * selected game.
+ */
+function wireSearchSyntaxHelp(input, dataEl, panel, toggle) {
+  if (!input || !dataEl) return;
+  let data;
+  try { data = JSON.parse(dataEl.textContent || '{}'); } catch (e) { return; }
+  const fields = data.fields || [];
+  const tags = data.tags || [];
+  const facets = data.facets || {};
+
+  if (toggle && panel) {
+    toggle.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  // field/alias -> canonical, so `t:` and `types:` both offer type values.
+  const canonical = {};
+  fields.forEach((f) => {
+    canonical[f.field] = f.field;
+    (f.aliases || []).forEach((a) => { canonical[a] = f.field; });
+  });
+
+  // Every spelling a user might be part-way through typing.
+  const opts = [];
+  fields.forEach((f) => (f.aliases || [f.field]).forEach((a) => opts.push({
+    insert: `${a}:`, label: `${a}:`, hint: f.description })));
+  tags.forEach((t) => (t.aliases || []).forEach((a) => opts.push({
+    insert: `${a}:`, label: `${a}:`, hint: t.description })));
+
+  const wrap = document.createElement('div');
+  wrap.className = 'typeahead';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const drop = document.createElement('div');
+  drop.className = 'typeahead-drop syntax-drop';
+  drop.hidden = true;
+  wrap.appendChild(drop);
+
+  let items = [];
+  let active = -1;
+
+  function close() { drop.hidden = true; drop.innerHTML = ''; items = []; active = -1; }
+
+  // The whitespace-delimited token the caret sits in — that's what we replace.
+  function currentToken() {
+    const pos = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, pos);
+    const start = Math.max(before.lastIndexOf(' '), before.lastIndexOf('\t')) + 1;
+    return { start, end: pos, text: before.slice(start) };
+  }
+
+  function suggestionsFor(token) {
+    const colon = token.indexOf(':');
+    if (colon < 0) {
+      if (!token) return [];
+      const t = token.toLowerCase();
+      return opts.filter((o) => o.label.startsWith(t)).slice(0, 8);
+    }
+    // After the colon: offer values for facet-backed fields.
+    const field = canonical[token.slice(0, colon).toLowerCase()];
+    const partial = token.slice(colon + 1).toLowerCase();
+    const values = facets[field] || [];
+    return values
+      .filter((v) => String(v).toLowerCase().startsWith(partial))
+      .slice(0, 8)
+      .map((v) => ({
+        insert: `${token.slice(0, colon)}:${/\s/.test(v) ? `"${v}"` : v}`,
+        label: v,
+        hint: field,
+      }));
+  }
+
+  function render(list) {
+    items = list;
+    active = list.length ? 0 : -1;
+    if (!list.length) { close(); return; }
+    drop.innerHTML = list.map((o, i) =>
+      `<button type="button" class="typeahead-item${i === 0 ? ' is-active' : ''}" data-i="${i}">
+         <span class="typeahead-meta">
+           <span class="typeahead-name"><code>${escapeHtml(o.label)}</code></span>
+           <span class="muted">${escapeHtml(o.hint || '')}</span>
+         </span>
+       </button>`).join('');
+    drop.hidden = false;
+    drop.querySelectorAll('.typeahead-item').forEach((btn) => {
+      btn.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        accept(items[Number(btn.dataset.i)]);
+      });
+    });
+  }
+
+  function accept(opt) {
+    if (!opt) return;
+    const tok = currentToken();
+    const after = input.value.slice(tok.end);
+    input.value = input.value.slice(0, tok.start) + opt.insert + after;
+    const caret = tok.start + opt.insert.length;
+    input.setSelectionRange(caret, caret);
+    close();
+    input.dispatchEvent(new Event('input'));
+  }
+
+  function setActive(i) {
+    active = i;
+    drop.querySelectorAll('.typeahead-item').forEach((el, idx) =>
+      el.classList.toggle('is-active', idx === active));
+  }
+
+  input.addEventListener('input', () => render(suggestionsFor(currentToken().text)));
+  input.addEventListener('keydown', (ev) => {
+    if (drop.hidden || !items.length) return;
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault(); setActive(Math.min(active + 1, items.length - 1));
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault(); setActive(Math.max(active - 1, 0));
+    } else if (ev.key === 'Tab' || (ev.key === 'Enter' && active >= 0)) {
+      // Enter with a suggestion open completes it rather than submitting —
+      // press Enter again to search.
+      ev.preventDefault(); accept(items[active]);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault(); close();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+}
+
+/**
  * Remember the Card library's last query string (game, search, sort, view…)
  * in sessionStorage so switching to another tab and back restores it, while
  * an actual page reload starts fresh. Two halves:
@@ -756,5 +893,10 @@ document.addEventListener('DOMContentLoaded', () => {
   wireJobDeleteButtons();
   wireCacheBadge();
   wireGalleryNavState();
+  wireSearchSyntaxHelp(
+    document.getElementById('gallery-q'),
+    document.getElementById('search-syntax-data'),
+    document.getElementById('search-syntax-help'),
+    document.getElementById('search-syntax-toggle'));
   wireCardPopover(document);
 });

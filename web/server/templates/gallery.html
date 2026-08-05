@@ -48,7 +48,16 @@
       </select>
     </label>
     <label>Card name
-      <input name="q" id="gallery-q" value="{{ q }}" placeholder="Name, or t:creature o:draw supertype:trainer…" autocomplete="off" title="Plain text searches name, type, rules text and subtypes. Field syntax: t: type, o: rules text, r: rarity, set:, artist:, supertype:, subtype:">
+      <span class="label-with-help">
+        <input name="q" id="gallery-q" value="{{ q }}"
+               placeholder="Name, or t:creature o:draw supertype:trainer…"
+               autocomplete="off"
+               aria-describedby="search-syntax-help"
+               title="Type a field name (t, o, r, set…) to see the operators for this game.">
+        <button type="button" class="syntax-help-btn" id="search-syntax-toggle"
+                aria-expanded="false" aria-controls="search-syntax-help"
+                title="Search syntax reference">?</button>
+      </span>
     </label>
     {% if series_options %}
     <label>Series / IP
@@ -108,6 +117,69 @@
       {% endif %}
     </div>
   </form>
+
+  {# Search syntax reference. Rendered from the parser's own field map, so it
+     lists exactly the operators that work for the selected game. #}
+  <div class="syntax-help" id="search-syntax-help" hidden>
+    <div class="syntax-help-head">
+      <strong>Search syntax</strong>
+      <span class="muted">
+        {% if game %}for {{ games.get(game, game) }}{% else %}across all games{% endif %}
+      </span>
+    </div>
+    <p class="muted syntax-help-lede">
+      Plain words match anywhere in the card — name, type, rules text and the
+      other fields below — including inside a word, so <code>bolt</code> finds
+      <em>Thunderbolt</em>. Combine as many terms as you like; every term must
+      match. Wrap a value in quotes to include spaces:
+      <code>o:"draw a card"</code>.
+    </p>
+    <table class="syntax-table">
+      <thead><tr><th>Field</th><th>Also written</th><th>Matches</th><th>Example</th></tr></thead>
+      <tbody>
+        {% for f in search_fields %}
+        <tr>
+          <td><code>{{ f.field }}:</code></td>
+          <td class="muted">{% for a in f.aliases %}<code>{{ a }}:</code>{% if not loop.last %} {% endif %}{% endfor %}</td>
+          <td>{{ f.description }}</td>
+          <td><code>{{ f.example }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if search_tags %}
+    <div class="syntax-help-head" style="margin-top:.8rem">
+      <strong>Scryfall tags</strong>
+      <span class="muted">offline — needs the tag downloaded first</span>
+    </div>
+    <table class="syntax-table">
+      <tbody>
+        {% for t in search_tags %}
+        <tr>
+          <td><code>{{ t.field }}:</code></td>
+          <td class="muted">{% for a in t.aliases %}<code>{{ a }}:</code>{% if not loop.last %} {% endif %}{% endfor %}</td>
+          <td>{{ t.description }}</td>
+          <td><code>{{ t.example }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted" style="margin:.5rem 0 0">
+      Tag queries resolve from the offline tag cache only — download a tag in
+      <strong>Download &amp; cache</strong> below to search it without a connection.
+    </p>
+    {% endif %}
+    <p class="muted" style="margin:.5rem 0 0">
+      An unrecognized <code>word:value</code> is searched as plain text, so a
+      stray colon never breaks a query. Negation (<code>-t:creature</code>) is
+      not supported locally.
+    </p>
+  </div>
+
+  <script id="search-syntax-data" type="application/json">
+    {{ {'fields': search_fields, 'tags': search_tags, 'facets': facets}|tojson }}
+  </script>
+
   <script>
   // Submit the library filters as soon as the game changes so its facet
   // dropdowns (rendered server-side) refresh for the newly selected game.
