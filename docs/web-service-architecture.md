@@ -179,6 +179,36 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   (no key) plus DotGG Arcane Box promos. Full MTG dumps still use
   `manage bulk-download`.
 
+  **Scheduled refresh (`web/server/auto_cache.py`).** Union Arena and Weiß
+  Schwarz publish complete catalogs with no filter language, so the only way to
+  notice a new expansion — or a card added to an existing one — is to re-walk
+  the catalog. A background thread (started from the app's lifespan handler)
+  enqueues a full-catalog refresh for those games every
+  `PROXYSHOP_AUTO_CACHE_HOURS` (default 24). The re-walk is cheap: card rows
+  upsert and `_store_and_image` skips any image already on disk, so only new
+  cards cost bandwidth. MTG and Pokémon are deliberately excluded — their
+  downloads are filter-driven, so there is no single catalog to refresh
+  unattended.
+
+  It cooperates with the manual queue rather than competing with it. The
+  scheduler only ever *appends*, and `should_skip()` refuses to act when:
+
+  | Situation | Why it defers |
+  |---|---|
+  | Paused by the user | Stop leaves the head queued with a `stopped` checkpoint (the stop *flag* is consumed by the run itself). Enqueuing calls `_ensure_worker`, which would restart the worker and resume that item — silently undoing the pause. |
+  | A stop is in flight | The flag is still on disk and the worker is winding down; adding work races that shutdown. |
+  | Queue stalled on an error | The head failed and was left for the user to inspect or retry. |
+
+  A game that is simply **running** is not skipped: `download_queue.enqueue`
+  de-dupes by spec hash, so a refresh that is already queued or in progress is
+  a no-op, and any other in-flight download just finishes first. Deferred games
+  are not stamped, so they retry on the next tick instead of waiting out a full
+  interval. Refreshes never pass `fresh=True`, so a user's queue and checkpoint
+  are never discarded. Last-run stamps live in `/data/cache-runs/auto-cache.json`
+  and survive restarts; the schedule is reported under `auto` in
+  `GET /api/cache-jobs`, and every decision is written to the game's log so it
+  shows up on the **Logs** page. Offline mode disables the thread entirely.
+
   **Cache UI:** the **Download & cache** panel (`templates/_cache_tool.html`,
   included by the Card library) has **Start download / Resume download / Stop
   download**, per-game filter fields, job chips for other games, a **Queue**

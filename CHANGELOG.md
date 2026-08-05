@@ -25,6 +25,13 @@ Desktop Proxyshop release history continues below.
   queue with Clear pending, collapsible offline tag cache, and Advanced options.
   The live log moved to the **Logs** page; the nav badge lives on Card library.
   APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
+- **Scheduled catalog refresh**: Union Arena and Weiß Schwarz re-walk their full
+  catalogs daily to pick up new expansions (existing cards upsert, existing
+  images are skipped, so only new cards cost bandwidth). MTG and Pokémon stay
+  manual — their downloads are filter-driven. The scheduler only appends to a
+  game's queue, de-dupes against an already-queued refresh, and defers when a
+  game is paused, stopping, or stalled. Configurable via `PROXYSHOP_AUTO_CACHE`,
+  `_GAMES` and `_HOURS`; reported under `auto` in `/api/cache-jobs`
 - **Offline tag cache**: Scryfall Tagger queries (`art:`, `otag:`, `function:`)
   cached locally so tag searches resolve without a connection; listed
   alphabetically with refresh/remove

@@ -22,6 +22,7 @@ import time
 import uuid as uuid_module
 import zipfile
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ from fastapi.templating import Jinja2Templates
 
 # Local Imports
 from web.server.db import JobStore
-from web.server import cache_runner, updater
+from web.server import auto_cache, cache_runner, updater
 from web.shared import cardquery, games, images, sheets
 from web.shared.carddb import CardDB, GALLERY_SORTS
 from web.shared.decklist import fetch_deck_url, parse_decklist_text
@@ -71,7 +72,21 @@ ALLOWED_ART_TYPES = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'}
 * App State
 """
 
-app = FastAPI(title='Proxyshop Web', docs_url='/api/docs')
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start background schedulers once the server is actually serving.
+
+    Deliberately not done at import time: the test suite imports/reloads this
+    module repeatedly, and a thread per reload would be both wasteful and a
+    source of surprise network calls.
+    """
+    auto_cache.start(
+        db=carddb, images_dir=IMAGES_DIR,
+        runs_dir=CACHE_RUNS_DIR, offline=OFFLINE)
+    yield
+
+
+app = FastAPI(title='Proxyshop Web', docs_url='/api/docs', lifespan=lifespan)
 # Gallery pages can carry hundreds of <option>/facet entries; images are
 # already compressed formats and skip this (below the size floor anyway).
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -1669,9 +1684,11 @@ def api_cache_game_status(request: Request, game: str):
 
 @app.get('/api/cache-jobs')
 def api_cache_jobs(request: Request):
-    """Status for all catalog-game cache jobs."""
+    """Status for all catalog-game cache jobs, plus the refresh schedule."""
     rate_limit(request, 'api')
-    return cache_runner.all_status(db=carddb, runs_dir=CACHE_RUNS_DIR)
+    payload = cache_runner.all_status(db=carddb, runs_dir=CACHE_RUNS_DIR)
+    payload['auto'] = auto_cache.status(CACHE_RUNS_DIR)
+    return payload
 
 
 @app.get('/api/tags')

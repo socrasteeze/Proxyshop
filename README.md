@@ -118,6 +118,13 @@ itself as you use it:
   plus `/data/images/`, with checkpoints you can stop and resume. Each game has
   its own queue, so you can stack several filter sets and let them run in
   sequence while other games download in parallel.
+- **Scheduled refresh** — Union Arena and Weiß Schwarz publish complete
+  catalogs, so the server re-walks them daily to pick up new expansions. A
+  re-walk only downloads what's genuinely new (existing cards upsert, existing
+  images are skipped). MTG and Pokémon stay manual, since their downloads are
+  filter-driven and there's no single "whole catalog" to refresh. The scheduler
+  only ever appends to a game's queue — it won't duplicate a queued refresh,
+  and it defers entirely if you've paused that game.
 - **Offline tag cache** — Scryfall Tagger queries (`art:`, `otag:`, `function:`)
   can't be resolved offline, so downloading with a tag saves its membership
   locally and the search box keeps working without a connection.
@@ -147,6 +154,9 @@ Common environment variables:
 | `PROXYSHOP_MAX_UPLOAD_MB` | `50` | Art upload cap |
 | `PROXYSHOP_POKEMONTCG_KEY` | — | Optional pokemontcg.io key (raises rate limits) |
 | `PROXYSHOP_PROVIDER_INTERVAL` | `0.25` | Seconds between provider requests |
+| `PROXYSHOP_AUTO_CACHE` | `1` | `0` disables the scheduled catalog refresh |
+| `PROXYSHOP_AUTO_CACHE_GAMES` | `union-arena,weiss-schwarz` | Games to refresh on a schedule |
+| `PROXYSHOP_AUTO_CACHE_HOURS` | `24` | Hours between refreshes per game |
 
 Cache pacing (`PROXYSHOP_CACHE_PAGE_INTERVAL`, `_CARD_`, `_IMAGE_`,
 `_PROVIDER_`) and build stamps (`PROXYSHOP_BUILD_COMMIT` / `_BRANCH` / `_AT`)
