@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf data)",
+      "Bash(rm -rf data/*)",
+      "Bash(rm -rf ./data*)",
+      "Bash(rm -rf /data*)",
+      "Bash(rm -r data*)",
+      "Bash(rm data/*)",
+      "Bash(docker volume rm*)",
+      "Bash(git clean -x*)",
+      "Bash(git clean -X*)",
+      "Bash(git clean -fx*)",
+      "Bash(git clean -xfd*)",
+      "Write(./data/**)",
+      "Edit(./data/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-card-data.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking card-data guard"
+          }
+        ]
+      }
+    ]
+  }
+}

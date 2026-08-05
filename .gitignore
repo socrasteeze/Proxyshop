@@ -196,3 +196,4 @@ cython_debug/
 /src/data/hexproof
 # Allow the internal build tools
 !src/data/build/
+.claude/hooks/protect-card-data.log

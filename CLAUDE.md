@@ -76,9 +76,26 @@ Stop. Say what you believe needs removing and why, and let the user decide.
 A wrong "yes" here costs them days of downloading; a wrong "no" costs a
 question. Never resolve that asymmetry yourself.
 
-Note for the user: this file is guidance an agent reads and follows — it is not
-an OS-level lock. For hard enforcement, pair it with `deny` rules in
-`.claude/settings.json` and keep a backup of `cards.db` and `images/`.
+### Enforcement
+
+This rule is backed by an actual guard, not just this document:
+
+- `.claude/settings.json` — `permissions.deny` rules for the obvious literal
+  forms (`rm -rf data*`, `docker volume rm`, `git clean -x`, writes into
+  `./data/**`). These are evaluated before any model reasoning.
+- `.claude/hooks/protect-card-data.py` — a `PreToolUse` hook that inspects every
+  Bash/Write/Edit call, pattern-matches destructive verbs and destructive SQL
+  against the protected paths, and returns `permissionDecision: "deny"` with a
+  loud explanation shown to **both** the agent and the user. Every block is
+  appended to `.claude/hooks/protect-card-data.log`. It never fails silently.
+
+If you are an agent and you hit that guard: **do not look for a way around it.**
+Do not rephrase the command, split it across steps, change directory first, or
+route it through a script. Report the block to the user and stop.
+
+Neither layer is an OS-level lock — the hook is a targeted guard, not a sandbox,
+and it fails open on anything it does not recognize. Keep real backups of
+`cards.db` and `images/` as the actual last line of defense.
 
 ---
 
