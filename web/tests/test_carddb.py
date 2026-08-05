@@ -498,3 +498,82 @@ class TestDecks:
         assert len(deck['cards']) == 2
         decks = carddb.get_decks()
         assert decks[0]['cards'] == 5  # total quantity
+
+
+class TestSearchIndex:
+    """The trigram/shadow search index. These guard against SILENT
+    degradation: a broken index still returns correct rows via the fallback
+    scan, so correctness tests alone would not notice it had stopped working."""
+
+    def _seed(self, carddb):
+        carddb.store_card({
+            'id': 'si1', 'name': 'Shivan Dragon', 'set': 'lea',
+            'collector_number': '1', 'lang': 'en', 'oracle_id': 'o1',
+            'type_line': 'Creature — Dragon', 'oracle_text': 'flying',
+            'rarity': 'rare', 'artist': 'Chris Rahn', 'colors': ['R'],
+        }, game='mtg')
+        carddb.store_card({
+            'id': 'si2', 'name': 'Counterspell', 'set': 'lea',
+            'collector_number': '2', 'lang': 'en', 'oracle_id': 'o2',
+            'type_line': 'Instant', 'oracle_text': 'counter target spell',
+            'rarity': 'common', 'artist': 'Mark Poole', 'colors': ['U'],
+        }, game='mtg')
+
+    def test_index_actually_builds(self, carddb):
+        # If this regresses, search silently falls back to a full scan.
+        assert carddb._trigram is True
+
+    def test_shadow_row_written_for_every_card(self, carddb):
+        self._seed(carddb)
+        n = carddb._conn().execute(
+            'SELECT COUNT(*) n FROM card_search').fetchone()['n']
+        assert n == 2
+
+    def test_shadow_row_removed_with_the_card(self, carddb):
+        self._seed(carddb)
+        carddb._conn().execute("DELETE FROM cards WHERE id='si1'")
+        carddb._conn().commit()
+        left = carddb._conn().execute(
+            'SELECT card_id FROM card_search').fetchall()
+        assert [r['card_id'] for r in left] == ['si2']
+
+    def test_shadow_row_updated_on_restore(self, carddb):
+        self._seed(carddb)
+        carddb.store_card({
+            'id': 'si1', 'name': 'Shivan Dragon', 'set': 'lea',
+            'collector_number': '1', 'lang': 'en', 'oracle_id': 'o1',
+            'type_line': 'Enchantment', 'oracle_text': 'changed text',
+            'rarity': 'rare', 'artist': 'Chris Rahn',
+        }, game='mtg')
+        row = carddb._conn().execute(
+            "SELECT type FROM card_search WHERE card_id='si1'").fetchone()
+        assert 'enchantment' in row['type']
+        assert carddb.list_gallery(game='mtg', q='t:creature')[1] == 0
+
+    def test_reserved_word_column_is_usable(self, carddb):
+        # 'set' is a SQL keyword; an unquoted column silently broke the whole
+        # search schema and dropped everything back to the fallback scan.
+        self._seed(carddb)
+        assert carddb.list_gallery(game='mtg', q='set:lea')[1] == 2
+
+    def test_field_filters_match_the_fallback_path(self, carddb):
+        """Shadow-column results must equal the un-indexed scan's results."""
+        self._seed(carddb)
+        for q in ('t:creature', 'o:flying', 'r:rare', 'a:rahn', 'c:r',
+                  't:instant', 't:creature o:flying', 'r:common t:creature'):
+            fast = carddb.list_gallery(game='mtg', q=q)[1]
+            carddb._trigram = False          # force the original scan
+            slow = carddb.list_gallery(game='mtg', q=q)[1]
+            carddb._trigram = True
+            assert fast == slow, f'{q!r}: indexed={fast} fallback={slow}'
+
+    def test_free_text_matches_inside_a_word(self, carddb):
+        self._seed(carddb)
+        # Trigram, not prefix: 'ragon' must still find 'Shivan Dragon'.
+        assert carddb.list_gallery(game='mtg', q='ragon')[1] == 1
+
+    def test_falls_back_cleanly_without_the_index(self, carddb):
+        self._seed(carddb)
+        carddb._trigram = False
+        assert carddb.list_gallery(game='mtg', q='dragon')[1] == 1
+        assert carddb.list_gallery(game='mtg', q='t:creature')[1] == 1

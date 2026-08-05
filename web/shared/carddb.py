@@ -218,29 +218,52 @@ END;
 # JSON twice (once to COUNT, once to SELECT).
 # Kept out of SCHEMA so builds without FTS5 (or without trigram, added in
 # SQLite 3.34) still work: the search path falls back to the old blob scan.
-SEARCH_SCHEMA = f"""
+# Bumped whenever the shadow table's shape changes, so an existing database
+# rebuilds it once instead of silently keeping stale columns. The table is
+# derived data — every column is recomputed from `cards` — so rebuilding it is
+# never destructive.
+SEARCH_SCHEMA_VERSION = '2'
+
+_SHADOW_COLS = cardquery.shadow_columns()
+
+
+def _search_schema() -> str:
+    # Every column identifier is quoted: field names come from the query
+    # parser's vocabulary, which includes SQL reserved words ('set').
+    cols = ',\n    '.join(f'"{c}" TEXT NOT NULL DEFAULT \'\'' for c in _SHADOW_COLS)
+    # One column per searchable field, plus `body` (everything concatenated)
+    # for free-text search. Both are written by the same trigger.
+    set_list = ', '.join(f'"{c}"=excluded."{c}"' for c in _SHADOW_COLS)
+    val_list = ', '.join(cardquery.shadow_column_sql(c, 'new.') for c in _SHADOW_COLS)
+    col_list = ', '.join(f'"{c}"' for c in _SHADOW_COLS)
+    upsert = (
+        f'INSERT INTO card_search (card_id, game, body, {col_list})\n'
+        f'    VALUES (new.id, new.game, {cardquery.search_body_sql("new.")}, {val_list})\n'
+        f'    ON CONFLICT(card_id) DO UPDATE SET '
+        f'game=excluded.game, body=excluded.body, {set_list};')
+    return f"""
 CREATE TABLE IF NOT EXISTS card_search (
     rowid INTEGER PRIMARY KEY,
     card_id TEXT NOT NULL UNIQUE,
     game TEXT NOT NULL,
-    body TEXT NOT NULL
+    body TEXT NOT NULL,
+    {cols}
 );
 CREATE INDEX IF NOT EXISTS idx_card_search_game ON card_search (game);
 
 CREATE TRIGGER IF NOT EXISTS cards_search_ai AFTER INSERT ON cards BEGIN
-    INSERT INTO card_search (card_id, game, body)
-    VALUES (new.id, new.game, {cardquery.search_body_sql('new.')})
-    ON CONFLICT(card_id) DO UPDATE SET game=excluded.game, body=excluded.body;
+    {upsert}
 END;
 CREATE TRIGGER IF NOT EXISTS cards_search_au AFTER UPDATE ON cards BEGIN
-    INSERT INTO card_search (card_id, game, body)
-    VALUES (new.id, new.game, {cardquery.search_body_sql('new.')})
-    ON CONFLICT(card_id) DO UPDATE SET game=excluded.game, body=excluded.body;
+    {upsert}
 END;
 CREATE TRIGGER IF NOT EXISTS cards_search_ad AFTER DELETE ON cards BEGIN
     DELETE FROM card_search WHERE card_id = old.id;
 END;
 """
+
+
+SEARCH_SCHEMA = _search_schema()
 
 # External-content trigram index over card_search. The content= form keeps the
 # text stored once; ANALYZE is what makes the planner pick the index for COUNT
@@ -459,6 +482,26 @@ class CardDB:
         rebuilt and no card data is touched.
         """
         try:
+            row = con.execute(
+                "SELECT value FROM meta WHERE key='search_schema_version'"
+            ).fetchone()
+            if (row['value'] if row else None) != SEARCH_SCHEMA_VERSION:
+                # Shape changed (or first run on an older build): drop the
+                # derived table and its index so they rebuild with the new
+                # columns. Only ever touches data recomputable from `cards`.
+                for trg in ('cards_search_ai', 'cards_search_au', 'cards_search_ad',
+                            'card_search_ai', 'card_search_au', 'card_search_ad'):
+                    con.execute(f'DROP TRIGGER IF EXISTS {trg}')
+                con.execute('DROP TABLE IF EXISTS cards_tri')
+                con.execute('DROP TABLE IF EXISTS card_search')
+                con.execute(
+                    "INSERT INTO meta (key, value) VALUES ('search_schema_version', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (SEARCH_SCHEMA_VERSION,))
+                con.commit()
+        except sqlite3.OperationalError:
+            pass
+        try:
             con.executescript(SEARCH_SCHEMA)
         except sqlite3.OperationalError:
             return False
@@ -474,10 +517,12 @@ class CardDB:
             if missing:
                 # Triggers keep this in sync from here on; this is the one-time
                 # backfill for cards stored before the index existed.
+                cols = ', '.join(f'"{c}"' for c in _SHADOW_COLS)
+                vals = ', '.join(cardquery.shadow_column_sql(c) for c in _SHADOW_COLS)
                 con.execute(
-                    f'INSERT INTO card_search (card_id, game, body) '
-                    f'SELECT id, game, {cardquery.search_body_sql()} FROM cards c '
-                    f'WHERE NOT EXISTS '
+                    f'INSERT INTO card_search (card_id, game, body, {cols}) '
+                    f'SELECT id, game, {cardquery.search_body_sql()}, {vals} '
+                    f'FROM cards c WHERE NOT EXISTS '
                     f'(SELECT 1 FROM card_search s WHERE s.card_id = c.id) '
                     f'ON CONFLICT(card_id) DO NOTHING')
                 con.execute("INSERT INTO cards_tri (cards_tri) VALUES ('rebuild')")
@@ -577,6 +622,22 @@ class CardDB:
             con.row_factory = sqlite3.Row
             con.execute('PRAGMA foreign_keys=ON')
             con.execute('PRAGMA busy_timeout=30000')
+            # Tuned for a NAS: the default 2MB page cache means a library that
+            # would comfortably sit in RAM is re-read from (often spinning)
+            # disk instead, and temp B-trees for un-indexed sorts spill to
+            # disk. WAL already makes readers lock-free, so a larger cache is
+            # pure win. NORMAL is the standard, safe pairing with WAL — a
+            # crash can lose the last transactions but never corrupts the file.
+            for pragma in (
+                'cache_size=-65536',      # 64MB of pages, not 2MB
+                'temp_store=MEMORY',      # sorts/temp b-trees stay in RAM
+                'mmap_size=268435456',    # 256MB memory-mapped reads
+                'synchronous=NORMAL',
+            ):
+                try:
+                    con.execute(f'PRAGMA {pragma}')
+                except sqlite3.OperationalError:
+                    pass  # a build without a pragma must not break the app
             self._local.con = con
         return con
 
@@ -1062,6 +1123,17 @@ class CardDB:
                         'JOIN cards_tri f ON f.rowid = s.rowid '
                         'WHERE cards_tri MATCH ?)')
                     params.append(f'"{term}"')
+                # Field filters (t:, o:, r:, …) read the shadow table's narrow
+                # per-field columns instead of json_extract-ing every row. The
+                # COUNT half of a page can't early-exit on LIMIT, so this is
+                # where the cost of a filtered search actually lived.
+                if getattr(self, '_trigram', False):
+                    sh_sql, sh_params, rest = cardquery.build_shadow_where(rest, game)
+                    if sh_sql:
+                        where.append(
+                            f'id IN (SELECT sh.card_id FROM card_search sh '
+                            f'WHERE {sh_sql})')
+                        params.extend(sh_params)
                 where_sql, where_params = cardquery.build_where(rest, game)
                 if where_sql != '1=1':
                     where.append(f'({where_sql})')

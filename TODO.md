@@ -25,12 +25,14 @@ work is tracked upstream.
 - [x] **Fix the Full-view prints lookup.** Indexed the art-group expression and
       added the `game` filter the composite index needs. 22.6 ms → 0.15 ms per
       card; a 60-card Full page went 1,356 ms → 9 ms. No batching needed.
-- [ ] **Combine-arts view is still ~244 ms** (was ~420 ms). The two window
-      functions still sort the filtered set; the art-group index only partly
-      helps. Non-default view, so lower priority.
-- [ ] **Field filters (`t:`, `o:`, …) still ~100 ms** — they run per-field
-      `json_extract` LIKE. Could route the common ones through the same shadow
-      table with per-field columns.
+- [ ] **Combine-arts view is still ~230 ms** (was ~420 ms). The two window
+      functions sort the whole filtered set, and the ROW_NUMBER ordering
+      (released_at, fetched_at, id) doesn't match the art-group index, so the
+      sort can't be skipped. Would need a materialized "newest printing per
+      group" table. Non-default view, so lower priority.
+- [x] **Field filters** now read per-field columns on the `card_search` shadow
+      table instead of `json_extract` per row. ~157 ms → ~40 ms. The COUNT half
+      of a page dominated, since it can't early-exit on LIMIT.
 - [ ] Consider a service worker for offline-first image browsing.
 
 ## Providers

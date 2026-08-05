@@ -33,6 +33,11 @@ Desktop Proxyshop release history continues below.
   1,356→9 ms. Bulk import defers index maintenance and rebuilds once, so it
   keeps its throughput. Everything is additive — no table is rebuilt — and the
   search path falls back to the old scan when FTS5/trigram is unavailable
+- **Field filters and SQLite tuning**: `t:`/`o:`/`r:`/`a:`/`set:` and the facet
+  dropdowns read per-field columns on the search shadow table rather than
+  `json_extract` per row (~157→40 ms); connections now use a 64 MB page cache,
+  in-memory temp store, mmap reads and `synchronous=NORMAL`, which also cut
+  catalog write time by ~3.5x
 - **Scheduled catalog refresh**: Union Arena and Weiß Schwarz re-walk their full
   catalogs daily to pick up new expansions (existing cards upsert, existing
   images are skipped, so only new cards cost bandwidth). MTG and Pokémon stay

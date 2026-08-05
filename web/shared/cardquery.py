@@ -237,6 +237,69 @@ _BODY_ARRAYS = (
 )
 
 
+# Canonical field -> one SQL expression that works for ANY game, so the shadow
+# search table can hold a column per field instead of re-parsing card JSON.
+# A card only populates its own game's paths, so the COALESCE unions below
+# collapse to that game's value and the per-game _SEARCH_FIELDS semantics are
+# preserved. Accents are folded here (é→e) exactly as _fold_sql does, so a
+# stored column compares the same way the old inline expression did.
+_SHADOW_FIELDS: dict[str, tuple[str, ...]] = {
+    'name': (),  # special-cased: reads the name column
+    'type': ("$.type_line", "$.provider_data.cardType"),
+    'oracle': ("$.oracle_text", "$.provider_data.description"),
+    'rarity': ("$.rarity", "$.provider_data.rarity"),
+    'artist': ("$.artist", "$.provider_data.artist"),
+    'flavor': ("$.flavor_text", "$.provider_data.flavorText"),
+    'mana': ("$.mana_cost",),
+    'supertype': ("$.provider_data.supertype",),
+    'domain': ("$.provider_data.domain",),
+    'hp': ("$.provider_data.hp",),
+}
+# Array-valued fields, flattened with json_each.
+_SHADOW_ARRAY_FIELDS: dict[str, tuple[str, ...]] = {
+    'color': ("$.colors",),
+    'subtype': ("$.provider_data.subtypes",),
+}
+# 'type' for Pokémon is an array (provider_data.types) but a scalar elsewhere,
+# so it gets both halves concatenated.
+_SHADOW_TYPE_ARRAYS = ("$.provider_data.types",)
+
+
+def shadow_columns() -> tuple[str, ...]:
+    """Field columns stored on the search shadow table, in schema order."""
+    return ('name', 'set', 'number', *(
+        k for k in (*_SHADOW_FIELDS, *_SHADOW_ARRAY_FIELDS) if k != 'name'))
+
+
+def shadow_column_sql(field: str, prefix: str = '') -> str:
+    """SQL computing one shadow column's value for a row of `cards`."""
+    j = f'{prefix}json'
+
+    def scalar(path: str) -> str:
+        return f"COALESCE(json_extract({j},'{path}'),'')"
+
+    def arr(path: str) -> str:
+        return (f"COALESCE((SELECT group_concat(value,' ') "
+                f"FROM json_each({j},'{path}')),'')")
+
+    if field == 'name':
+        expr = f'{prefix}name'
+    elif field == 'set':
+        expr = (f"COALESCE({prefix}set_code,'') || ' ' || "
+                f"COALESCE(json_extract({j},'$.set_name'),'')")
+    elif field == 'number':
+        expr = f"COALESCE({prefix}collector_number,'')"
+    elif field == 'type':
+        parts = [scalar(p) for p in _SHADOW_FIELDS['type']]
+        parts += [arr(p) for p in _SHADOW_TYPE_ARRAYS]
+        expr = " || ' ' || ".join(parts)
+    elif field in _SHADOW_ARRAY_FIELDS:
+        expr = " || ' ' || ".join(arr(p) for p in _SHADOW_ARRAY_FIELDS[field])
+    else:
+        expr = " || ' ' || ".join(scalar(p) for p in _SHADOW_FIELDS[field])
+    return f"replace(lower({expr}),'é','e')"
+
+
 def search_body_sql(prefix: str = '') -> str:
     """SQL expression building a row's full searchable text, lowercased.
 
@@ -354,6 +417,33 @@ def tag_help() -> list[dict]:
          'description': 'Scryfall function tag',
          'example': 'function:ramp'},
     ]
+
+
+def build_shadow_where(parsed: ParsedQuery, game: Optional[str]) -> tuple[str, list, ParsedQuery]:
+    """Field filters rewritten against the `card_search` shadow columns.
+
+    Returns (sql, params, leftover) — leftover holds anything the shadow table
+    can't answer, which the caller passes to build_where() as before. Matching
+    a short precomputed column instead of re-parsing every card's JSON is what
+    makes the COUNT half of a filtered page cheap; the COUNT can't early-exit
+    on LIMIT, so it dominated the old field-filter cost.
+    """
+    known = _SEARCH_FIELDS[_resolve_game(game)]
+    cols = set(shadow_columns())
+    clauses: list[str] = []
+    params: list = []
+    leftover = ParsedQuery()
+    leftover.terms = list(parsed.terms)
+    for field, value in parsed.fields:
+        # Only rewrite fields this game actually searches, so a Pokémon query
+        # can't start matching an MTG-only column.
+        if field in cols and field in known:
+            # Quoted: 'set' and friends are SQL reserved words.
+            clauses.append(f'sh."{field}" LIKE ?')
+            params.append(f'%{fold_value(value)}%')
+        else:
+            leftover.fields.append((field, value))
+    return (' AND '.join(clauses) if clauses else ''), params, leftover
 
 
 def name_rank_sql(text: str) -> tuple[str, list]:
