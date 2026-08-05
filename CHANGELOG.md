@@ -25,6 +25,14 @@ Desktop Proxyshop release history continues below.
   queue with Clear pending, collapsible offline tag cache, and Advanced options.
   The live log moved to the **Logs** page; the nav badge lives on Card library.
   APIs `/api/cache-jobs`, `/api/cache-game/{game}/log`
+- **Search and sort are index-backed**: free text runs against a trigram FTS5
+  index over a new `card_search` shadow table rather than `LIKE '%…%'` over a
+  `json_extract` blob, keeping identical substring semantics; the common gallery
+  sorts and the art-group key get expression indexes. At 40k cards: search
+  426→40 ms, price/colour sorts 179/310→2 ms, and a 60-card Full page
+  1,356→9 ms. Bulk import defers index maintenance and rebuilds once, so it
+  keeps its throughput. Everything is additive — no table is rebuilt — and the
+  search path falls back to the old scan when FTS5/trigram is unavailable
 - **Scheduled catalog refresh**: Union Arena and Weiß Schwarz re-walk their full
   catalogs daily to pick up new expansions (existing cards upsert, existing
   images are skipped, so only new cards cost bandwidth). MTG and Pokémon stay

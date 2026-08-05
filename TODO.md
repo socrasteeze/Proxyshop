@@ -11,19 +11,26 @@ work is tracked upstream.
 
 ## Performance
 
-- [ ] **FTS-backed gallery search.** `cardquery.build_where` matches free text
-      with `LIKE '%…%'` over a concatenated `json_extract` blob, so every search
-      is a full scan that parses each row's JSON twice (COUNT + SELECT). The
-      FTS5 infrastructure already exists in `carddb.py` (`cards_fts`) but is
-      only wired to `search_local`, not to `list_gallery`.
-- [ ] **Index the hot JSON sort fields.** `rarity`, `artist`, `type_line`,
-      `usd`, `cmc`, `set_name` are read via `json_extract` on every sort.
-      Promote them to stored generated columns with indexes.
-- [ ] **Batch the Full-view prints lookup.** `page_gallery` calls
-      `list_art_group` once per card, and that query compares against a
-      computed `CASE` expression, so it can't use an index — one full scan per
-      card, up to 120 per page. Needs a batched query plus a stored generated
-      column for the art-group key.
+- [x] **Index-backed gallery search.** Free text now goes through a trigram
+      FTS5 index over a `card_search` shadow table instead of `LIKE '%…%'` over
+      a `json_extract` blob. Trigram keeps exact substring semantics (a search
+      for `bolt` still finds `Thunderbolt`), so results are unchanged.
+      ~426 ms → ~40 ms at 40k cards.
+- [x] **Index the hot sorts.** SQLite can't add STORED generated columns via
+      ALTER TABLE, so these are expression indexes instead — which works, but
+      only if the index reproduces the whole ORDER BY: leading `game`, then the
+      `(expr) IS NULL` NULLs-last guard, then the expression, then every
+      tiebreak column. Miss any term and SQLite silently re-sorts the whole set.
+      ~179 ms → ~2 ms. Curated subset only (each index is write cost).
+- [x] **Fix the Full-view prints lookup.** Indexed the art-group expression and
+      added the `game` filter the composite index needs. 22.6 ms → 0.15 ms per
+      card; a 60-card Full page went 1,356 ms → 9 ms. No batching needed.
+- [ ] **Combine-arts view is still ~244 ms** (was ~420 ms). The two window
+      functions still sort the filtered set; the art-group index only partly
+      helps. Non-default view, so lower priority.
+- [ ] **Field filters (`t:`, `o:`, …) still ~100 ms** — they run per-field
+      `json_extract` LIKE. Could route the common ones through the same shadow
+      table with per-field columns.
 - [ ] Consider a service worker for offline-first image browsing.
 
 ## Providers

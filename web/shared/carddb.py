@@ -52,13 +52,16 @@ GALLERY_SORTS: dict[str, tuple[str, bool, str]] = {
         " WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2"
         " WHEN 'mythic' THEN 3 WHEN 'special' THEN 4 WHEN 'bonus' THEN 5"
         " ELSE 6 END", False, 'asc'),
+    # json_array_length instead of two correlated json_each subqueries: same
+    # ordering, one JSON parse per row instead of three — and, unlike a
+    # subquery, it is a deterministic scalar so the expression can be indexed.
     'color': (
-        "CASE"
-        " WHEN (SELECT COUNT(*) FROM json_each(cards.json,'$.colors')) = 0 THEN 6"
-        " WHEN (SELECT COUNT(*) FROM json_each(cards.json,'$.colors')) > 1 THEN 5"
-        " ELSE (CASE json_extract(cards.json,'$.colors[0]')"
+        "CASE json_array_length(json,'$.colors')"
+        " WHEN 0 THEN 6"
+        " WHEN 1 THEN (CASE json_extract(json,'$.colors[0]')"
         "        WHEN 'W' THEN 0 WHEN 'U' THEN 1 WHEN 'B' THEN 2"
-        "        WHEN 'R' THEN 3 WHEN 'G' THEN 4 ELSE 5 END) END", False, 'asc'),
+        "        WHEN 'R' THEN 3 WHEN 'G' THEN 4 ELSE 5 END)"
+        " ELSE 5 END", False, 'asc'),
     'usd': ("CAST(json_extract(json,'$.prices.usd') AS REAL)", True, 'desc'),
     'eur': ("CAST(json_extract(json,'$.prices.eur') AS REAL)", True, 'desc'),
     'tix': ("CAST(json_extract(json,'$.prices.tix') AS REAL)", True, 'desc'),
@@ -206,6 +209,63 @@ CREATE TRIGGER IF NOT EXISTS cards_fts_au AFTER UPDATE OF name ON cards BEGIN
     INSERT INTO cards_fts (rowid, name) VALUES (new.rowid, new.name);
 END;
 """
+
+# Precomputed free-text search. `card_search` mirrors one lowercased blob of
+# every searchable field per card, and `cards_tri` is a trigram FTS5 index over
+# it. Trigram gives true substring matching — identical results to the old
+# `LIKE '%term%'` over a json_extract blob, including matches inside a word —
+# but as an index lookup instead of a full scan that re-parses every card's
+# JSON twice (once to COUNT, once to SELECT).
+# Kept out of SCHEMA so builds without FTS5 (or without trigram, added in
+# SQLite 3.34) still work: the search path falls back to the old blob scan.
+SEARCH_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS card_search (
+    rowid INTEGER PRIMARY KEY,
+    card_id TEXT NOT NULL UNIQUE,
+    game TEXT NOT NULL,
+    body TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_search_game ON card_search (game);
+
+CREATE TRIGGER IF NOT EXISTS cards_search_ai AFTER INSERT ON cards BEGIN
+    INSERT INTO card_search (card_id, game, body)
+    VALUES (new.id, new.game, {cardquery.search_body_sql('new.')})
+    ON CONFLICT(card_id) DO UPDATE SET game=excluded.game, body=excluded.body;
+END;
+CREATE TRIGGER IF NOT EXISTS cards_search_au AFTER UPDATE ON cards BEGIN
+    INSERT INTO card_search (card_id, game, body)
+    VALUES (new.id, new.game, {cardquery.search_body_sql('new.')})
+    ON CONFLICT(card_id) DO UPDATE SET game=excluded.game, body=excluded.body;
+END;
+CREATE TRIGGER IF NOT EXISTS cards_search_ad AFTER DELETE ON cards BEGIN
+    DELETE FROM card_search WHERE card_id = old.id;
+END;
+"""
+
+# External-content trigram index over card_search. The content= form keeps the
+# text stored once; ANALYZE is what makes the planner pick the index for COUNT
+# (without it the COUNT plan degrades badly).
+TRIGRAM_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_tri USING fts5(
+    body,
+    content='card_search',
+    content_rowid='rowid',
+    tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS card_search_ai AFTER INSERT ON card_search BEGIN
+    INSERT INTO cards_tri (rowid, body) VALUES (new.rowid, new.body);
+END;
+CREATE TRIGGER IF NOT EXISTS card_search_ad AFTER DELETE ON card_search BEGIN
+    INSERT INTO cards_tri (cards_tri, rowid, body) VALUES ('delete', old.rowid, old.body);
+END;
+CREATE TRIGGER IF NOT EXISTS card_search_au AFTER UPDATE ON card_search BEGIN
+    INSERT INTO cards_tri (cards_tri, rowid, body) VALUES ('delete', old.rowid, old.body);
+    INSERT INTO cards_tri (rowid, body) VALUES (new.rowid, new.body);
+END;
+"""
+
+# Trigram needs at least this many characters to use the index.
+TRIGRAM_MIN_CHARS = 3
 
 """
 * Rate-Limited Scryfall Session
@@ -363,6 +423,8 @@ class CardDB:
             con.executescript(SCHEMA)
             con.execute('PRAGMA journal_mode=WAL')
             self._fts = self._init_fts(con)
+            self._trigram = self._init_search(con)
+            self._init_sort_indexes(con)
 
     @staticmethod
     def _migrate(con: sqlite3.Connection) -> None:
@@ -387,6 +449,94 @@ class CardDB:
             con.execute("INSERT INTO cards_fts (cards_fts) VALUES ('rebuild')")
             con.commit()
         return True
+
+    @staticmethod
+    def _init_search(con: sqlite3.Connection) -> bool:
+        """Build the search shadow table + trigram index; False when unsupported.
+
+        Backfills existing rows once (a fresh upgrade of a large library costs a
+        few seconds here, then never again). Purely additive — no table is
+        rebuilt and no card data is touched.
+        """
+        try:
+            con.executescript(SEARCH_SCHEMA)
+        except sqlite3.OperationalError:
+            return False
+        try:
+            con.executescript(TRIGRAM_SCHEMA)
+        except sqlite3.OperationalError:
+            return False  # SQLite < 3.34 (no trigram) or FTS5 missing
+        try:
+            missing = con.execute(
+                'SELECT COUNT(*) AS n FROM cards c '
+                'WHERE NOT EXISTS (SELECT 1 FROM card_search s WHERE s.card_id = c.id)'
+            ).fetchone()['n']
+            if missing:
+                # Triggers keep this in sync from here on; this is the one-time
+                # backfill for cards stored before the index existed.
+                con.execute(
+                    f'INSERT INTO card_search (card_id, game, body) '
+                    f'SELECT id, game, {cardquery.search_body_sql()} FROM cards c '
+                    f'WHERE NOT EXISTS '
+                    f'(SELECT 1 FROM card_search s WHERE s.card_id = c.id) '
+                    f'ON CONFLICT(card_id) DO NOTHING')
+                con.execute("INSERT INTO cards_tri (cards_tri) VALUES ('rebuild')")
+                con.commit()
+            con.execute('ANALYZE')  # the COUNT plan depends on this
+            con.commit()
+        except sqlite3.OperationalError:
+            return False
+        return True
+
+    @staticmethod
+    def _init_sort_indexes(con: sqlite3.Connection) -> None:
+        """Index the common gallery sorts so ORDER BY walks an index.
+
+        The index has to reproduce the ORDER BY that list_gallery emits, term
+        for term: leading `game` (so one index serves the filter and the
+        ordering), then the NULLs-last guard for numeric sorts, then the sort
+        expression in its default direction, then every tiebreak column. Miss
+        any of those and SQLite silently falls back to materializing and
+        sorting the whole filtered set — the leading `(expr IS NULL)` guard in
+        particular is easy to forget and costs the entire benefit.
+
+        Only the default direction is indexed. Reversing a sort re-sorts (the
+        tiebreak stays ASC, so the index can't simply be walked backwards);
+        that is the rarer case and still correct, just not index-speed.
+
+        Deliberately a curated subset, not every key in GALLERY_SORTS: each
+        index is another b-tree to update on every insert, which the catalog
+        downloader pays per card. The omitted sorts (eur, tix, power,
+        toughness, artist, edhrec) fall back to a sort.
+        """
+        indexed = ('name', 'set', 'released', 'newest', 'rarity', 'color',
+                   'cmc', 'usd')
+        tiebreak = ('set_code, CAST(collector_number AS INTEGER), '
+                    'collector_number, name COLLATE NOCASE')
+        for key in indexed:
+            spec = GALLERY_SORTS.get(key)
+            if not spec:
+                continue
+            expr, is_numeric, default_dir = spec
+            if 'SELECT' in expr:
+                continue  # correlated subqueries can't be indexed
+            direction = 'DESC' if default_dir == 'desc' else 'ASC'
+            null_guard = f'({expr}) IS NULL, ' if is_numeric else ''
+            try:
+                con.execute(
+                    f'CREATE INDEX IF NOT EXISTS idx_cards_sort_{key} ON cards '
+                    f'(game, {null_guard}{expr} {direction}, {tiebreak})')
+            except sqlite3.OperationalError:
+                continue  # a non-indexable expression must not break startup
+        try:
+            # Serves both the per-card Prints lookup and the combine-arts
+            # PARTITION BY, which otherwise scan the table per card.
+            con.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_cards_art_group '
+                f'ON cards (game, {CardDB._ART_GROUP_EXPR})')
+        except sqlite3.OperationalError:
+            pass
+        con.commit()
 
     @staticmethod
     def _fts_query(text: str) -> str:
@@ -686,10 +836,11 @@ class CardDB:
                    json_extract(json, '$.prices.eur') AS eur,
                    json_extract(json, '$.prices.tix') AS tix
             FROM cards
-            WHERE ({expr}) = (SELECT ({expr}) FROM cards WHERE id = ?)
+            WHERE game = (SELECT game FROM cards WHERE id = ?)
+              AND ({expr}) = (SELECT ({expr}) FROM cards WHERE id = ?)
             ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
             LIMIT ?
-            """, (card_id, limit)).fetchall()
+            """, (card_id, card_id, limit)).fetchall()
         return [
             {
                 'id': r['id'],
@@ -831,6 +982,27 @@ class CardDB:
         " ELSE (game || '|' || lower(name)) END"
     )
 
+    def _split_trigram_terms(self, parsed) -> tuple[list[str], Any]:
+        """Split free-text terms into (index-served, left-on-the-slow-path).
+
+        Only terms the trigram index can actually answer are peeled off: it
+        needs TRIGRAM_MIN_CHARS characters, and the index must exist. Anything
+        else (short terms, no FTS5/trigram build) falls back to the original
+        blob scan, so results are the same either way — just slower.
+        """
+        if not getattr(self, '_trigram', False):
+            return [], parsed
+        keep = cardquery.ParsedQuery()
+        keep.fields = list(parsed.fields)
+        served: list[str] = []
+        for term in parsed.terms:
+            # A term containing a quote would break the MATCH string; leave it.
+            if len(term) >= TRIGRAM_MIN_CHARS and '"' not in term:
+                served.append(term)
+            else:
+                keep.terms.append(term)
+        return served, keep
+
     def list_gallery(
         self,
         *,
@@ -878,9 +1050,22 @@ class CardDB:
                 # game-scoped (t:, o:, supertype:, 'supporter', …) or cross-game
                 # via the universal field set when no game is selected.
                 parsed = cardquery.parse_query(q, game)
-                where_sql, where_params = cardquery.build_where(parsed, game)
-                where.append(f'({where_sql})')
-                params.extend(where_params)
+                # Free-text terms go through the trigram index when we can:
+                # substring semantics are identical to the LIKE blob it
+                # replaces, but it reads an index instead of parsing every
+                # card's JSON. Field filters (t:, o:, …) keep the exact
+                # per-field expressions and stay on the normal path.
+                terms, rest = self._split_trigram_terms(parsed)
+                for term in terms:
+                    where.append(
+                        'rowid IN (SELECT s.rowid FROM card_search s '
+                        'JOIN cards_tri f ON f.rowid = s.rowid '
+                        'WHERE cards_tri MATCH ?)')
+                    params.append(f'"{term}"')
+                where_sql, where_params = cardquery.build_where(rest, game)
+                if where_sql != '1=1':
+                    where.append(f'({where_sql})')
+                    params.extend(where_params)
         if set_code.strip():
             where.append('set_code=?')
             params.append(set_code.strip().lower())
@@ -1471,17 +1656,60 @@ class CardDB:
         """
         count = 0
         con = self._conn()
-        for card in iter_bulk_cards(path):
-            if card.get('object') != 'card':
-                continue
-            self.store_card(card, source=source, commit=False)
-            count += 1
-            if count % batch == 0:
-                con.commit()
-        con.commit()
+        # Maintaining the trigram search index row-by-row costs several ms per
+        # card — irrelevant next to a catalog download's network pacing, but it
+        # would dominate a 100k-card bulk file. Drop the sync triggers for the
+        # duration and rebuild the index once at the end, which is far cheaper
+        # than 100k incremental updates. Restored in `finally` so an aborted
+        # import can never leave the index silently un-maintained.
+        deferred = self._defer_search_sync(con)
+        try:
+            for card in iter_bulk_cards(path):
+                if card.get('object') != 'card':
+                    continue
+                self.store_card(card, source=source, commit=False)
+                count += 1
+                if count % batch == 0:
+                    con.commit()
+            con.commit()
+        finally:
+            if deferred:
+                self._resume_search_sync(con)
         self.set_meta('bulk_imported_at', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
         self.set_meta('bulk_file', str(path.name))
         return count
+
+    def _defer_search_sync(self, con: sqlite3.Connection) -> bool:
+        """Drop the search-index triggers for a bulk write. True if dropped."""
+        if not getattr(self, '_trigram', False):
+            return False
+        try:
+            for trg in ('cards_search_ai', 'cards_search_au', 'cards_search_ad',
+                        'card_search_ai', 'card_search_au', 'card_search_ad'):
+                con.execute(f'DROP TRIGGER IF EXISTS {trg}')
+            con.commit()
+        except sqlite3.OperationalError:
+            return False
+        return True
+
+    def _resume_search_sync(self, con: sqlite3.Connection) -> None:
+        """Recreate the search triggers and rebuild the index from scratch."""
+        try:
+            con.executescript(SEARCH_SCHEMA)
+            con.executescript(TRIGRAM_SCHEMA)
+            # Rows written while the triggers were off are missing from the
+            # shadow table; backfill them, then rebuild the trigram index.
+            con.execute(
+                f'INSERT INTO card_search (card_id, game, body) '
+                f'SELECT id, game, {cardquery.search_body_sql()} FROM cards c '
+                f'WHERE NOT EXISTS '
+                f'(SELECT 1 FROM card_search s WHERE s.card_id = c.id) '
+                f'ON CONFLICT(card_id) DO NOTHING')
+            con.execute("INSERT INTO cards_tri (cards_tri) VALUES ('rebuild')")
+            con.execute('ANALYZE')
+            con.commit()
+        except sqlite3.OperationalError:
+            self._trigram = False  # index is untrustworthy; fall back to scans
 
     """
     * Decks

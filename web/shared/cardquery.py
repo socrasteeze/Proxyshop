@@ -209,6 +209,44 @@ def _blob_expr(game: str) -> str:
     return " || ' ' || ".join(fields.values())
 
 
+# Scalar (subquery-free) searchable paths, unioned across every game. A card
+# only ever populates its own game's paths, so a card's body is the same text
+# its per-game blob would produce — this is what the `card_search` shadow table
+# stores so free-text search never re-parses the card JSON. Kept subquery-free
+# where possible so it is cheap to compute in a trigger.
+_BODY_SCALARS = (
+    "$.type_line", "$.oracle_text", "$.flavor_text", "$.artist", "$.rarity",
+    "$.mana_cost", "$.set_name",
+    "$.provider_data.supertype", "$.provider_data.cardType",
+    "$.provider_data.domain", "$.provider_data.description",
+    "$.provider_data.flavorText", "$.provider_data.rarity",
+    "$.provider_data.artist", "$.provider_data.hp",
+)
+_BODY_ARRAYS = (
+    "$.colors", "$.provider_data.subtypes", "$.provider_data.types",
+)
+
+
+def search_body_sql(prefix: str = '') -> str:
+    """SQL expression building a row's full searchable text, lowercased.
+
+    ``prefix`` is 'new.' inside a trigger, '' when selecting from `cards`.
+    """
+    j = f'{prefix}json'
+    parts = [
+        f'lower({prefix}name)',
+        f"lower(COALESCE({prefix}set_code,''))",
+        f"lower(COALESCE({prefix}collector_number,''))",
+    ]
+    parts += [f"lower(COALESCE(json_extract({j},'{p}'),''))" for p in _BODY_SCALARS]
+    parts += [
+        f"lower(COALESCE((SELECT group_concat(value,' ') "
+        f"FROM json_each({j},'{p}')),''))"
+        for p in _BODY_ARRAYS
+    ]
+    return " || ' ' || ".join(parts)
+
+
 def build_where(parsed: ParsedQuery, game: Optional[str]) -> tuple[str, list]:
     """Return (sql_fragment, params) — an ANDed WHERE body (no leading AND).
 
