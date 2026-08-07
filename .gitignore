@@ -117,6 +117,12 @@ celerybeat.pid
 venv/
 env.bak/
 venv.bak/
+
+# Keys and certificates — nothing here should ever be committed
+*.pem
+*.key
+*.p12
+*.pfx
 # Spyder project settings
 .spyderproject
 .spyproject
