@@ -1718,6 +1718,54 @@ async def api_tags_delete(request: Request):
     return {'ok': True, 'removed': removed, 'tag': cardquery.normalize_tag(tag)}
 
 
+@app.post('/api/tags/refresh')
+async def api_tags_refresh(request: Request):
+    """Re-download every cached MTG tag, one queued job per tag.
+
+    Each tag is queued as its own download with the tag as the only filter —
+    the same shape the per-tag Refresh button produces — so the membership it
+    stores comes back under the exact same key. Nothing is deleted: a tag whose
+    run never finishes keeps the membership it already had.
+    """
+    rate_limit(request, 'cache')
+    if OFFLINE:
+        raise HTTPException(
+            status_code=503,
+            detail='Offline mode is on — refreshing tags needs the live provider')
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    kind = str((isinstance(body, dict) and body.get('kind')) or 'png')
+    queued: list[str] = []
+    skipped: list[str] = []
+    for row in carddb.list_cached_tags():
+        tag = (row.get('tag') or '').strip()
+        if not tag:
+            continue
+        try:
+            cache_runner.enqueue(
+                'mtg',
+                db=carddb,
+                images_dir=IMAGES_DIR,
+                runs_dir=CACHE_RUNS_DIR,
+                filters={'tags': tag},
+                image_kind=kind,
+            )
+        except ValueError:
+            # A stored key that no longer builds a provider query shouldn't
+            # sink the whole refresh — report it and queue the rest.
+            skipped.append(tag)
+            continue
+        queued.append(tag)
+    return {
+        'ok': True,
+        'queued': queued,
+        'skipped': skipped,
+        'status': cache_runner.status('mtg', db=carddb, runs_dir=CACHE_RUNS_DIR),
+    }
+
+
 @app.get('/api/cache-game/{game}/log')
 def api_cache_game_log(request: Request, game: str, limit: int = 200):
     """Recent log lines for a cache run."""

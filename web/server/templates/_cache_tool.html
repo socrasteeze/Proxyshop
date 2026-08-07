@@ -69,7 +69,9 @@
   </div>
 
   <details id="cached-tags" class="cached-tags" hidden>
-    <summary class="cached-tags-head">Offline tag cache<span id="cached-tags-count" class="cached-tags-count"></span></summary>
+    <summary class="cached-tags-head">Offline tag cache<span id="cached-tags-count" class="cached-tags-count"></span>
+      <button type="button" class="btn-ghost" id="cached-tags-refresh-all" hidden>Refresh all</button>
+    </summary>
     <ul id="cached-tags-list" class="cached-tags-list"></ul>
     <p class="muted" id="cached-tags-empty" hidden>No tags cached yet. Run a download with a Scryfall tag above to add one.</p>
   </details>
@@ -402,6 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let tagsOpenWired = false;
+  let cachedTagCount = 0;
   async function refreshTags() {
     const box = document.getElementById('cached-tags');
     const list = document.getElementById('cached-tags-list');
@@ -415,6 +418,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/tags');
       if (res.ok) tags = (await res.json()).tags || [];
     } catch (e) { return; }
+    cachedTagCount = tags.length;
+    const refreshAllBtn = document.getElementById('cached-tags-refresh-all');
+    if (refreshAllBtn) {
+      refreshAllBtn.hidden = tags.length === 0;
+      refreshAllBtn.disabled = offline;
+      refreshAllBtn.title = offline
+        ? 'Offline mode is on — refreshing tags needs a connection'
+        : `Queue a re-download of all ${tags.length} cached tags`;
+    }
     // Collapsed by default once there are a few tags; open state persists.
     const TAGS_OPEN_KEY = 'proxyshop.tags.open';
     if (!tagsOpenWired) {
@@ -491,6 +503,44 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tagsEl) tagsEl.value = tag;
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     postCache('start', false);
+  }
+
+  // Re-download every cached tag in one click. The server queues one download
+  // per tag (same shape as a single Refresh), so each keeps its own membership
+  // key and the queue drains at the provider's rate-limited pace.
+  async function refreshAllTags() {
+    if (offline || game.value !== 'mtg' || !cachedTagCount) return;
+    const n = cachedTagCount;
+    if (!confirm(
+      `Refresh all ${n} cached tag${n === 1 ? '' : 's'} from Scryfall?\n\n`
+      + `This queues ${n} download${n === 1 ? '' : 's'} behind anything already `
+      + 'running. Downloads are rate-limited, so a large tag cache takes a '
+      + 'while — you can stop or clear the queue at any point.')) return;
+    statusEl.textContent = 'Queueing tag refresh…';
+    try {
+      const res = await fetch('/api/tags/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: imageKind('mtg') }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = body.detail;
+        statusEl.textContent =
+          (detail && (detail.message || (typeof detail === 'string' ? detail : null)))
+          || `Could not refresh tags (${res.status})`;
+        return;
+      }
+      const st = body.status || {};
+      statusEl.textContent = formatStatus(st);
+      applyButtons(st);
+      renderQueue(st);
+      refreshJobs();
+      if (st.running && !pollTimer) pollTimer = setInterval(refreshStatus, 2000);
+      setTimeout(refreshStatus, 800);
+    } catch (e) {
+      statusEl.textContent = 'Could not reach the server to refresh tags.';
+    }
   }
 
   async function postCache(path, fresh) {
@@ -629,6 +679,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const inlineTagBtn = document.getElementById('cache-this-tag');
   if (inlineTagBtn) {
     inlineTagBtn.addEventListener('click', () => startTagDownload(inlineTagBtn.dataset.tag));
+  }
+  const refreshAllBtn = document.getElementById('cached-tags-refresh-all');
+  if (refreshAllBtn) {
+    refreshAllBtn.addEventListener('click', (e) => {
+      // It lives in the <summary>, so a plain click would also toggle the
+      // section open/closed underneath us.
+      e.preventDefault();
+      e.stopPropagation();
+      refreshAllTags();
+    });
   }
   syncPanel();
 });

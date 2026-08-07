@@ -47,7 +47,8 @@ Desktop Proxyshop release history continues below.
   `_GAMES` and `_HOURS`; reported under `auto` in `/api/cache-jobs`
 - **Offline tag cache**: Scryfall Tagger queries (`art:`, `otag:`, `function:`)
   cached locally so tag searches resolve without a connection; listed
-  alphabetically with refresh/remove
+  alphabetically with refresh/remove, plus a **Refresh all** button that queues
+  a re-download of every cached MTG tag in one click (`/api/tags/refresh`)
 - **Selective cache**: MTG/Pokémon filters; Riftbound via Riftcodex; Union Arena
   and Weiß Schwarz via official cardlists
 - **Weiß Schwarz**: EN + JP cardlist provider with a scraped → official cardlist

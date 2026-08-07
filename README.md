@@ -166,7 +166,9 @@ itself as you use it:
   and it defers entirely if you've paused that game.
 - **Offline tag cache** — Scryfall Tagger queries (`art:`, `otag:`, `function:`)
   can't be resolved offline, so downloading with a tag saves its membership
-  locally and the search box keeps working without a connection.
+  locally and the search box keeps working without a connection. Tags go stale
+  as Scryfall's taggers work; **Refresh all** re-queues every cached MTG tag at
+  once, and single tags can still be refreshed or removed individually.
 - **Image cache** — full scans download exactly once; grid tiles are served as
   small derived WebP thumbnails, so browsing a big library stays fast on a LAN.
 

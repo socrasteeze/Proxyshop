@@ -835,6 +835,47 @@ class TestTagCache:
     def test_tags_delete_requires_tag(self, client):
         assert client.post('/api/tags/delete', json={}).status_code == 422
 
+    def test_tags_refresh_queues_every_tag(self, appmod, client, monkeypatch):
+        # Stub the worker so the refresh only enqueues (no download threads).
+        appmod.OFFLINE = False
+        monkeypatch.setattr(appmod.cache_runner, '_ensure_worker',
+                            lambda *a, **k: None)
+        appmod.carddb.store_card(make_card('d-1', 'Shivan Dragon', 'tst', '1'))
+        appmod.carddb.record_tag('art:dragon', ['d-1'])
+        appmod.carddb.record_tag('otag:removal', ['d-1'])
+        r = client.post('/api/tags/refresh', json={'kind': 'large'})
+        assert r.status_code == 200
+        body = r.json()
+        assert sorted(body['queued']) == ['art:dragon', 'otag:removal']
+        assert body['skipped'] == []
+        # One queued download per tag, each scoped to just that tag.
+        queue = client.get('/api/cache-game/mtg').json()['queue']
+        assert queue[0]['state'] == 'queued'
+        assert sorted(it['label'] for it in queue) == ['art:dragon', 'otag:removal']
+        assert {it['kind'] for it in queue} == {'large'}
+        # The memberships are untouched — a refresh replaces them only once its
+        # download actually finishes.
+        assert len(client.get('/api/tags').json()['tags']) == 2
+        # Re-running de-dupes against the pending queue rather than stacking.
+        client.post('/api/tags/refresh', json={'kind': 'large'})
+        assert client.get('/api/cache-game/mtg').json()['queued_count'] == 2
+
+    def test_tags_refresh_with_no_tags_is_a_noop(self, appmod, client, monkeypatch):
+        appmod.OFFLINE = False
+        monkeypatch.setattr(appmod.cache_runner, '_ensure_worker',
+                            lambda *a, **k: None)
+        body = client.post('/api/tags/refresh').json()
+        assert body['queued'] == []
+        assert client.get('/api/cache-game/mtg').json()['queued_count'] == 0
+
+    def test_tags_refresh_blocked_when_offline(self, client):
+        assert client.post('/api/tags/refresh').status_code == 503
+
+    def test_cache_panel_offers_refresh_all_tags(self, client):
+        html = client.get('/gallery', params={'game': 'mtg'}).text
+        assert 'id="cached-tags-refresh-all"' in html
+        assert '/api/tags/refresh' in html
+
     def test_library_offers_to_cache_uncached_tag(self, appmod, client):
         # An uncached tag in the Card Library surfaces the cache affordance
         # (online) rather than a live fetch.

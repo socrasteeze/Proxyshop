@@ -214,6 +214,11 @@ All card data flows through `web/shared/carddb.py`, an SQLite cache:
   download**, per-game filter fields, job chips for other games, a **Queue**
   sub-panel (with *Clear pending*), the collapsible **Offline tag cache**, and
   **Advanced options → Start new download with these filters (discard saved)**.
+  The tag cache lists each cached tag with *Refresh* / *Remove*, and its header
+  carries a **Refresh all** button: `POST /api/tags/refresh` enqueues one MTG
+  download per cached tag (the tag as the sole filter, so the run stores back
+  under the same key) and returns the resulting queue. Nothing is deleted up
+  front — a tag whose run never finishes keeps the membership it already had.
   There is no inline log — the panel links to the **Logs** page (`/logs`), a
   full live viewer with a game switcher. The nav **Card library** link shows a
   badge while any cache job is running. APIs: `GET /api/cache-jobs`,
@@ -571,6 +576,7 @@ Interactive docs live at `/api/docs`. Key endpoints:
 | `/api/cache-jobs` | GET | — | Status for all catalog-game cache jobs |
 | `/api/tags` | GET | — | Cached offline Scryfall tags |
 | `/api/tags/delete` | POST | — | Forget a cached tag (cards stay) |
+| `/api/tags/refresh` | POST | — | Queue a re-download of every cached MTG tag |
 | `/api/update` | GET | — | Update/watcher status |
 | `/api/update` | POST | — | Request a host-side update & restart |
 | `/api/worker/hello` | POST | Bearer | Capabilities handshake |

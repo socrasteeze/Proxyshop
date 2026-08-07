@@ -1305,6 +1305,10 @@ body.modal-open { overflow: hidden; }
 /* Offline tag cache list (under the MTG cache filters) */
 #cached-tags { margin-top: 1rem; }
 .cached-tags-head {
+  /* Flex (no gap) so Refresh all can sit at the far right without disturbing
+     the marker/label/count spacing. */
+  display: flex;
+  align-items: center;
   font-size: .8rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -1325,6 +1329,17 @@ body.modal-open { overflow: hidden; }
 details#cached-tags[open] > .cached-tags-head::before { transform: rotate(90deg); }
 details#cached-tags[open] > .cached-tags-head { margin-bottom: .55rem; }
 .cached-tags-count { color: var(--muted); font-weight: 600; }
+#cached-tags-refresh-all {
+  width: auto;
+  margin-left: auto;
+  padding: .2rem .55rem;
+  font-size: .75rem;
+  text-transform: none;
+  letter-spacing: 0;
+  background: #3a3d46;
+  color: var(--text);
+}
+#cached-tags-refresh-all:disabled { opacity: .5; cursor: not-allowed; }
 .cached-tags-list {
   list-style: none;
   margin: 0;
