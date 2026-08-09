@@ -164,3 +164,30 @@ def app_version() -> dict:
         'built_at': os.environ.get('PROXYSHOP_BUILD_AT') or '',
         'branch': os.environ.get('PROXYSHOP_BUILD_BRANCH') or '',
     }
+
+
+def asset_version(static_dir: Path) -> str:
+    """Cache-busting token for /static URLs.
+
+    StaticFiles sends ETag and Last-Modified but no Cache-Control, so a browser
+    is free to apply heuristic freshness — roughly a tenth of the file's age.
+    An asset untouched for a fortnight therefore stays cached for a day or more
+    *without revalidating*, and a deploy in that window pairs freshly rendered
+    HTML with pre-deploy CSS. That fails silently and confusingly: new markup
+    renders unstyled rather than erroring, so it reads as a layout bug.
+
+    Versioning the URL sidesteps the whole question — a deploy asks for a URL
+    the cache has never seen. The build commit is the natural token; locally
+    there is none, so fall back to the newest asset mtime, which changes
+    exactly when an edit lands.
+    """
+    commit = (os.environ.get('PROXYSHOP_BUILD_COMMIT') or '').strip()
+    if commit:
+        return commit[:12]
+    try:
+        return str(int(max(
+            p.stat().st_mtime for p in
+            (Path(static_dir) / 'app.css', Path(static_dir) / 'app.js')
+            if p.is_file())))
+    except (ValueError, OSError):
+        return 'dev'  # no assets to stamp; correctness doesn't depend on this

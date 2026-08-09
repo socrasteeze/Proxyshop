@@ -169,3 +169,43 @@ class TestUpdateApi:
         limit = appmod.RATE_LIMITS['update'][0]
         codes = [client.post('/api/update').status_code for _ in range(limit + 1)]
         assert codes[-1] == 429
+
+
+class TestAssetVersion:
+    """Static URLs carry a build token so a deploy can't be served new HTML
+    against a browser's pre-deploy CSS. See updater.asset_version()."""
+
+    def test_uses_build_commit_when_stamped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('PROXYSHOP_BUILD_COMMIT', 'f548bba1234567890')
+        assert updater.asset_version(tmp_path) == 'f548bba12345'  # trimmed to 12
+
+    def test_falls_back_to_asset_mtime_locally(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('PROXYSHOP_BUILD_COMMIT', raising=False)
+        (tmp_path / 'app.css').write_text('a{}')
+        (tmp_path / 'app.js').write_text('//')
+        first = updater.asset_version(tmp_path)
+        assert first.isdigit()
+        # An edit must produce a new token, or a dev reload serves stale CSS.
+        import os
+        later = (tmp_path / 'app.css').stat().st_mtime + 60
+        os.utime(tmp_path / 'app.css', (later, later))
+        assert updater.asset_version(tmp_path) != first
+
+    def test_survives_a_missing_static_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('PROXYSHOP_BUILD_COMMIT', raising=False)
+        assert updater.asset_version(tmp_path / 'nope') == 'dev'
+
+    @pytest.fixture()
+    def appmod(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('PROXYSHOP_DATA_DIR', str(tmp_path / 'data'))
+        monkeypatch.setenv('PROXYSHOP_OFFLINE', '1')
+        monkeypatch.setenv('PROXYSHOP_BUILD_COMMIT', 'deadbeefcafe')
+        import web.server.app as appmod
+        yield importlib.reload(appmod)
+
+    def test_pages_link_versioned_assets(self, appmod):
+        """The whole point: the served HTML must not request a bare app.css."""
+        html = TestClient(appmod.app).get('/').text
+        assert '/static/app.css?v=deadbeefcafe' in html
+        assert '/static/app.js?v=deadbeefcafe' in html
+        assert '"/static/app.css"' not in html

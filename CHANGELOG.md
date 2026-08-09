@@ -62,6 +62,17 @@ Desktop Proxyshop release history continues below.
 
 ### Fix
 
+- **Static assets are versioned** (`/static/app.css?v=<build>`). `StaticFiles`
+  sends ETag and Last-Modified but no `Cache-Control`, so browsers applied
+  heuristic freshness — an asset untouched for a fortnight stayed cached for a
+  day or more without revalidating. A deploy in that window paired new HTML
+  with pre-deploy CSS, which showed up as unstyled controls (the Card library
+  `?` help button rendering as a bare button below the search box) rather than
+  as anything that looked like a caching problem. The token is the build
+  commit, or the newest asset mtime when running locally
+- **Card library**: shortened the search placeholder, which was long enough to
+  be clipped mid-word (`…supertype:trair`) at most column widths and read as
+  corrupted text. The full syntax is one click away behind the `?`
 - **Providers**: Weiß Schwarz catalog scrape repaired for the redesigned EN/JP
   endpoints; transient 5xx retries
 - Branding: use the original Proxyshop logo for the web favicon and header icon

@@ -92,6 +92,10 @@ app = FastAPI(title='Proxyshop Web', docs_url='/api/docs', lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+# Stamped into every /static/app.{css,js} URL so a deploy can't serve new HTML
+# against a browser's pre-deploy copy. Resolved once: it's fixed for the life
+# of the process either way. See updater.asset_version().
+templates.env.globals['asset_version'] = updater.asset_version(STATIC_DIR)
 
 store = JobStore(DATA_DIR / 'jobs.db')
 carddb = CardDB(DATA_DIR / 'cards.db', offline=OFFLINE)

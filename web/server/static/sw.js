@@ -81,12 +81,27 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Precached static assets: stale-while-revalidate.
+  //
+  // isPrecachedAsset matches on pathname, so a versioned `app.css?v=<build>`
+  // still routes through here — and because cache.match keys on the full URL,
+  // the first request after a deploy misses and goes straight to the network.
+  // That is the behaviour we want: a new build is never served from an old
+  // entry. It does mean each deploy adds a key rather than replacing one, so
+  // prune the superseded copies of the same file as the new one lands.
   if (isPrecachedAsset(url)) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>
         cache.match(req).then((cached) => {
           const network = fetch(req)
-            .then((res) => { cache.put(req, res.clone()); return res; })
+            .then((res) => {
+              cache.put(req, res.clone());
+              cache.keys().then((keys) => keys.forEach((k) => {
+                if (k.url !== req.url && new URL(k.url).pathname === url.pathname) {
+                  cache.delete(k);
+                }
+              }));
+              return res;
+            })
             .catch(() => cached);
           return cached || network;
         })));
