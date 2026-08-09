@@ -16,6 +16,8 @@
 #      this rebuilds), so nas-watch.sh runs it on the host. See that file.
 #
 # Test the fetch/install path without docker:  DRY_RUN=1 sh nas-update.sh
+# Test the install path without GitHub (no PAT needed):
+#   LOCAL_TARBALL=/path/to/app.tar.gz DRY_RUN=1 sh nas-update.sh
 # ============================================================================
 set -eu
 
@@ -70,13 +72,6 @@ cd "$HOME" 2>/dev/null || cd / || true
 echo "==> Deploying $APP_NAME from $REPO@$BRANCH"
 
 # --- fetch ------------------------------------------------------------------
-[ -f "$TOKEN_FILE" ] || {
-  echo "ERROR: token file $TOKEN_FILE not found."
-  echo "Create it:  echo '<github_pat>' > $TOKEN_FILE && chmod 600 $TOKEN_FILE"
-  exit 1
-}
-TOKEN="$(cat "$TOKEN_FILE")"
-
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -84,6 +79,14 @@ if [ -n "${LOCAL_TARBALL:-}" ]; then
   # Test hook: use a pre-made tarball instead of hitting GitHub
   cp "$LOCAL_TARBALL" "$TMP/app.tar.gz"
 else
+  # Only the GitHub fetch needs the PAT, so the check belongs here — a
+  # LOCAL_TARBALL run must not demand a token it will never send.
+  [ -f "$TOKEN_FILE" ] || {
+    echo "ERROR: token file $TOKEN_FILE not found."
+    echo "Create it:  echo '<github_pat>' > $TOKEN_FILE && chmod 600 $TOKEN_FILE"
+    exit 1
+  }
+  TOKEN="$(cat "$TOKEN_FILE")"
   DL="https://api.github.com/repos/$REPO/tarball/$BRANCH"
   echo "==> Fetching $DL"
   curl -fSL -H "Authorization: Bearer $TOKEN" "$DL" -o "$TMP/app.tar.gz"
