@@ -77,6 +77,13 @@ Desktop Proxyshop release history continues below.
   started it over. Now waits `DEPLOY_TIMEOUT` seconds (default 600) and checks
   each pass whether the container is still running, so a genuine crash still
   fails immediately instead of sitting out the whole timeout
+- **`nas-update.sh`**: finds the docker binary instead of trusting `PATH`.
+  TerraMaster keeps it under `/Volume1/@apps/DockerEngine/dockerd/bin`, which
+  only a *login* shell picks up — so cron (`PATH=/usr/bin:/bin`) and
+  `ssh host "sh nas-update.sh"` both died at `docker build`. That was masked
+  only by `nas-watch.sh` having been started by hand from a login shell; a
+  cron restart of the watcher would have broken every later deploy. Override
+  with `DOCKER_BIN_DIR=/path/to/bin`
 - **`nas-update.sh`**: names `PROXYSHOP_AUTO_CACHE` in the `docker run` block so
   the deploy that starts scheduled catalog re-walks says so, and forwards
   `PROXYSHOP_AUTO_CACHE_GAMES` / `_HOURS` when set. `_GAMES` is passed only when

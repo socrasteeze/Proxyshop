@@ -158,6 +158,30 @@ if [ -n "${DRY_RUN:-}" ]; then
 fi
 
 # --- build & run ------------------------------------------------------------
+# TerraMaster keeps the docker binary off the default PATH — only a *login*
+# shell picks it up. Cron runs with PATH=/usr/bin:/bin and
+# `ssh host "sh nas-update.sh"` is non-login, so both would die below with
+# "docker: command not found". Today that is masked by nas-watch.sh having been
+# started by hand from a login shell; the moment cron restarts it, the deploy
+# breaks. Resolve docker here instead of trusting the caller's environment.
+if ! command -v docker >/dev/null 2>&1; then
+  for _dir in ${DOCKER_BIN_DIR:-} /Volume1/@apps/DockerEngine/dockerd/bin \
+              /usr/local/bin /opt/bin /usr/bin; do
+    if [ -x "$_dir/docker" ]; then
+      PATH="$_dir:$PATH"
+      export PATH
+      echo "==> Found docker in $_dir (added to PATH)"
+      break
+    fi
+  done
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker not found. Looked on PATH and in:"
+  echo "  ${DOCKER_BIN_DIR:+$DOCKER_BIN_DIR (DOCKER_BIN_DIR), }/Volume1/@apps/DockerEngine/dockerd/bin, /usr/local/bin, /opt/bin, /usr/bin"
+  echo "Point at it directly:  DOCKER_BIN_DIR=/path/to/bin sh nas-update.sh"
+  exit 1
+fi
+
 echo "==> Building image $APP_NAME:latest"
 docker build -t "$APP_NAME:latest" -f "$APP_DIR/web/server/Dockerfile" "$APP_DIR"
 
