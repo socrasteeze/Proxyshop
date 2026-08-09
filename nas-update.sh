@@ -134,8 +134,15 @@ fi
 mkdir -p "$DATA_DIR"
 
 # Provider API keys — optional files, empty means "no key" to the app.
-# Strip CR/LF so `echo key > file` does not break header auth.
-POKEMONTCG_KEY="$(tr -d '\r\n' < "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
+# Strip CR/LF so `echo key > file` does not break header auth. Gate on -f first:
+# a missing file makes the shell itself fail the `<` redirect before tr ever
+# runs, and dash reports that straight to the real stderr — the `2>/dev/null`
+# on this same command is already active by then, so it doesn't catch it.
+if [ -f "$POKEMONTCG_KEY_FILE" ]; then
+  POKEMONTCG_KEY="$(tr -d '\r\n' < "$POKEMONTCG_KEY_FILE" 2>/dev/null || true)"
+else
+  POKEMONTCG_KEY=""
+fi
 [ -n "$POKEMONTCG_KEY" ] && echo "==> Pokémon TCG key: found" \
                          || echo "==> Pokémon TCG key: none (keyless rate limits)"
 
