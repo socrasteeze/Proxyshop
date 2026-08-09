@@ -54,6 +54,14 @@ work is tracked upstream.
       round. It's plain `/bin/sh` with no docker or network dependency in the
       `LOCAL_TARBALL` + `DRY_RUN` combination, so a small shellcheck/bats-style
       harness could catch a regression here without needing a real PAT.
+- [ ] **The card search index is built on the import path.** `CardDB.__init__`
+      runs as a module-level global in `web/server/app.py`, so the one-time
+      `card_search` backfill and `cards_tri` rebuild block the port from being
+      bound at all — the app is invisible, not merely slow, for the duration.
+      `nas-update.sh` now waits it out (`DEPLOY_TIMEOUT`), but that treats the
+      symptom. The fix is to let `/api/health` answer first and build the index
+      in a background task or a lifespan startup step, reporting progress so a
+      deploy can distinguish "indexing" from "hung".
 - [ ] Multi-worker is functional (atomic claims, per-worker capabilities) but
       the UI merges template lists from all workers — treat as experimental
       until the UI is per-worker aware.

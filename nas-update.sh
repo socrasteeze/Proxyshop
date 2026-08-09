@@ -18,6 +18,12 @@
 # Test the fetch/install path without docker:  DRY_RUN=1 sh nas-update.sh
 # Test the install path without GitHub (no PAT needed):
 #   LOCAL_TARBALL=/path/to/app.tar.gz DRY_RUN=1 sh nas-update.sh
+#
+# First boot after a search-schema change rebuilds the card search index over
+# the whole library before the app serves a single request — minutes, not
+# seconds, on a large one. The health check waits DEPLOY_TIMEOUT seconds
+# (default 600); raise it for a very large library:
+#   DEPLOY_TIMEOUT=1800 sh nas-update.sh
 # ============================================================================
 set -eu
 
@@ -159,15 +165,31 @@ docker build -t "$APP_NAME:latest" -f "$APP_DIR/web/server/Dockerfile" "$APP_DIR
 VOLUME_ARGS=""
 [ -f "$POKEMONTCG_KEY_FILE" ] && VOLUME_ARGS="$VOLUME_ARGS -v $POKEMONTCG_KEY_FILE:/run/secrets/proxyshop-pokemontcg-key:ro"
 
+# Scheduled-refresh tuning, forwarded only when the caller actually set it.
+# Passing these unconditionally would be wrong: an *empty* value is not the same
+# as an unset one to `auto_cache.scheduled_games()`, which falls back to its
+# defaults only when the variable is absent. `-e PROXYSHOP_AUTO_CACHE_GAMES=`
+# would therefore schedule nothing at all, silently.
+AUTO_CACHE_ARGS=""
+[ -n "${PROXYSHOP_AUTO_CACHE_GAMES:-}" ] && AUTO_CACHE_ARGS="$AUTO_CACHE_ARGS -e PROXYSHOP_AUTO_CACHE_GAMES=$PROXYSHOP_AUTO_CACHE_GAMES"
+[ -n "${PROXYSHOP_AUTO_CACHE_HOURS:-}" ] && AUTO_CACHE_ARGS="$AUTO_CACHE_ARGS -e PROXYSHOP_AUTO_CACHE_HOURS=$PROXYSHOP_AUTO_CACHE_HOURS"
+
 echo "==> Restarting container"
 docker stop "$APP_NAME" 2>/dev/null || true
 docker rm   "$APP_NAME" 2>/dev/null || true
+# Scheduled catalog re-walks (Union Arena / Weiß Schwarz) start with this
+# deploy. The app already defaults them on; naming the variable here keeps that
+# visible in the script that turns it on, and `:-` keeps it overridable:
+#   PROXYSHOP_AUTO_CACHE=0 sh nas-update.sh              # off
+#   PROXYSHOP_AUTO_CACHE_GAMES=union-arena sh nas-update.sh   # narrow (see above)
+#   PROXYSHOP_AUTO_CACHE_HOURS=72 sh nas-update.sh            # re-time
 # shellcheck disable=SC2086
 docker run -d --name "$APP_NAME" --restart unless-stopped \
   -p "$PORT" \
   --user "$CONTAINER_USER" \
   -e PROXYSHOP_WORKER_TOKEN="$(tr -d '\r\n' < "$WORKER_TOKEN_FILE")" \
   -e PROXYSHOP_OFFLINE=0 \
+  -e PROXYSHOP_AUTO_CACHE="${PROXYSHOP_AUTO_CACHE:-1}" \
   -e PROXYSHOP_MAX_UPLOAD_MB=50 \
   -e PROXYSHOP_POKEMONTCG_KEY="$POKEMONTCG_KEY" \
   -e PROXYSHOP_BUILD_COMMIT="$BUILD_COMMIT" \
@@ -175,15 +197,25 @@ docker run -d --name "$APP_NAME" --restart unless-stopped \
   -e PROXYSHOP_BUILD_AT="$BUILD_AT" \
   -v "$DATA_DIR":/data \
   $VOLUME_ARGS \
+  $AUTO_CACHE_ARGS \
   "$APP_NAME:latest"
 
 # --- verify -----------------------------------------------------------------
+# Wait on a deadline, not a fixed tick count. `CardDB.__init__` runs at import,
+# so a first boot after a search-schema change rebuilds the whole card search
+# index *before* uvicorn binds the port — a fixed 30s window reports a healthy
+# deploy as failed, and the natural reaction (re-run the updater) stops the
+# container mid-rebuild and starts it over.
+#
+# Waiting longer must not mean sitting out a real crash, so each pass asks
+# whether the container is still running: a stopped one fails immediately.
 HOST_PORT="${PORT%%:*}"
-echo "==> Waiting for health check on port $HOST_PORT"
-i=0
-while [ $i -lt 15 ]; do
+DEPLOY_TIMEOUT="${DEPLOY_TIMEOUT:-600}"
+echo "==> Waiting for health check on port $HOST_PORT (up to ${DEPLOY_TIMEOUT}s)"
+waited=0
+while [ "$waited" -lt "$DEPLOY_TIMEOUT" ]; do
   if curl -fsS "http://127.0.0.1:$HOST_PORT/api/health" >/dev/null 2>&1; then
-    echo "==> OK: $APP_NAME is up — http://<nas>:$HOST_PORT"
+    echo "==> OK: $APP_NAME is up after ${waited}s — http://<nas>:$HOST_PORT"
     echo "    First deploy? Import the card database once:"
     echo "    docker exec $APP_NAME python -m web.server.manage bulk-download"
     echo "    Cache Riftbound (stop/resume safe):"
@@ -192,9 +224,23 @@ while [ $i -lt 15 ]; do
     echo "    Union Arena / Riftbound search need no API key."
     exit 0
   fi
-  i=$((i + 1))
+  # Missing container inspects as "false" too — either way it isn't coming up.
+  running="$(docker inspect -f '{{.State.Running}}' "$APP_NAME" 2>/dev/null || echo false)"
+  if [ "$running" != "true" ]; then
+    echo "ERROR: $APP_NAME is not running (stopped after ${waited}s). Recent logs:"
+    docker logs --tail 40 "$APP_NAME" || true
+    exit 1
+  fi
   sleep 2
+  waited=$((waited + 2))
+  # Minutes of silence reads as a hang; name the usual cause instead.
+  if [ $((waited % 30)) -eq 0 ]; then
+    echo "    still starting (${waited}s) — a first boot after a search-schema"
+    echo "    change rebuilds the card search index before serving."
+  fi
 done
-echo "ERROR: health check failed after 30s. Recent logs:"
+echo "ERROR: health check failed after ${DEPLOY_TIMEOUT}s. Recent logs:"
 docker logs --tail 40 "$APP_NAME" || true
+echo "    Still indexing a very large library? Retry with a longer wait:"
+echo "    DEPLOY_TIMEOUT=1800 sh nas-update.sh"
 exit 1

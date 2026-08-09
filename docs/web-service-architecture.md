@@ -455,7 +455,23 @@ Notes:
   `CONTAINER_USER` in the script.
 - Test the fetch/install path on any Linux box with `DRY_RUN=1 sh nas-update.sh`.
   Pair it with `LOCAL_TARBALL=/path/to/app.tar.gz` to skip the GitHub fetch
-  (and the PAT check, which only runs on the fetch path) entirely.
+  (and the PAT check, which only runs on the fetch path) entirely. Note this
+  exits before the build/verify stage, so it does not exercise the health-check
+  loop.
+- **A first boot after a search-schema change is slow, and that is expected.**
+  `CardDB.__init__` runs at import — before uvicorn binds the port — so the
+  one-time `card_search` backfill and `cards_tri` trigram rebuild happen with
+  nothing answering on `/api/health` yet. On a six-figure library that is
+  minutes. The script waits `DEPLOY_TIMEOUT` seconds (default 600) and prints a
+  progress line every 30s; raise it for a very large library:
+  `DEPLOY_TIMEOUT=1800 sh nas-update.sh`. It re-checks each pass that the
+  container is still running, so a container that actually died is reported at
+  once rather than after the full timeout.
+- Deploying an update that changes the search schema writes to `cards.db`, but
+  only additively: the derived `card_search` / `cards_tri` tables are dropped
+  and rebuilt from `cards`, and `cards`, `decks`, `prices`, `card_tags` and
+  `tag_cache` are never touched. Back up `cards.db` first anyway — see
+  `CLAUDE.md`.
 
 ## Part 2 — Remote access (Tailscale, recommended)
 

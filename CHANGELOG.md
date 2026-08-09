@@ -69,6 +69,19 @@ Desktop Proxyshop release history continues below.
   fetches from GitHub, so the documented `LOCAL_TARBALL=` test hook no longer
   demands a token it never sends; also stopped a spurious "cannot open" line
   on every run without an optional Pokémon TCG key file
+- **`nas-update.sh`**: a first boot that rebuilds the card search index no
+  longer reports a healthy deploy as failed. The fixed 30s health check became
+  wrong once `CardDB.__init__` gained an index build that runs before the port
+  is bound — on a large library that takes minutes, and the obvious reaction to
+  the false failure (re-run the updater) stopped the container mid-rebuild and
+  started it over. Now waits `DEPLOY_TIMEOUT` seconds (default 600) and checks
+  each pass whether the container is still running, so a genuine crash still
+  fails immediately instead of sitting out the whole timeout
+- **`nas-update.sh`**: names `PROXYSHOP_AUTO_CACHE` in the `docker run` block so
+  the deploy that starts scheduled catalog re-walks says so, and forwards
+  `PROXYSHOP_AUTO_CACHE_GAMES` / `_HOURS` when set. `_GAMES` is passed only when
+  non-empty: `auto_cache.scheduled_games()` falls back to its defaults on an
+  *absent* variable, so forwarding an empty one would schedule nothing at all
 
 ### Tools
 
