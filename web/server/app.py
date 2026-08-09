@@ -266,6 +266,20 @@ def favicon():
     return FileResponse(STATIC_DIR / 'img' / 'favicon.ico', media_type='image/x-icon')
 
 
+@app.get('/sw.js', include_in_schema=False)
+def service_worker():
+    """Serve the service worker at root scope.
+
+    A service worker's default scope is the directory it's served from, and
+    it can't intercept navigations outside that scope. Served under /static
+    it would only ever see /static/* requests; this root-level route (same
+    pattern as /favicon.ico above) is what lets it control the whole app.
+    """
+    return FileResponse(
+        STATIC_DIR / 'sw.js', media_type='application/javascript',
+        headers={'Cache-Control': 'no-cache'})
+
+
 @app.get('/', response_class=HTMLResponse)
 def page_index(request: Request, card_id: str = ''):
     caps = _capabilities()

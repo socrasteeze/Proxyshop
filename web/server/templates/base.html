@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#14151a">
+  <!-- iOS ignores <meta name="theme-color">'s app-chrome effect but does use
+       these two for standalone/Add-to-Home-Screen: capable + a status-bar
+       style matched to the dark theme (default-ish, but explicit rather than
+       left undefined). -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Proxyshop">
   <title>{% block title %}Proxyshop{% endblock %}</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
   <link rel="icon" href="/static/img/favicon.ico" sizes="any">
   <link rel="icon" href="/static/img/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">

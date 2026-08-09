@@ -13,7 +13,12 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  /* Stop Safari inflating text size on rotation to landscape. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   margin: 0;
   background:
@@ -23,18 +28,37 @@ body {
   color: var(--text);
   font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
   min-height: 100vh;
+  /* iOS's 100vh includes the collapsed-URL-bar zone; dvh (when supported —
+     this line wins over the fallback above) tracks the real visible height,
+     so short pages don't under-fill and .logs-body's own dvh height below
+     isn't fought by a larger min-height. */
+  min-height: 100dvh;
 }
 a {
   color: var(--accent);
   text-decoration: none;
   transition: color .15s var(--ease), opacity .15s var(--ease);
 }
-a:hover { text-decoration: underline; }
+@media (hover: hover) { a:hover { text-decoration: underline; } }
+/* Kill the ~300ms double-tap-to-zoom delay and the default gray tap flash on
+   every interactive control, site-wide. Neither has a visible effect on
+   non-touch devices, so this doesn't need a @media gate like the touch-target
+   sizing below does. */
+a, button, summary, input, select, textarea {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
 header {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  padding: .85rem 1.4rem;
+  /* Sticky at the physical top: the notch/Dynamic Island/status-bar can sit
+     over it once viewport-fit=cover is active, so top/left/right pad out to
+     the safe area (max() keeps the original spacing when there is none). */
+  padding-top: max(.85rem, env(safe-area-inset-top));
+  padding-right: max(1.4rem, env(safe-area-inset-right));
+  padding-bottom: .85rem;
+  padding-left: max(1.4rem, env(safe-area-inset-left));
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(10px);
@@ -44,7 +68,7 @@ header {
 }
 header h1 { font-size: 1.1rem; margin: 0; letter-spacing: .02em; }
 header h1 .brand { color: var(--text); display: inline-flex; align-items: center; gap: .55rem; }
-header h1 .brand:hover { text-decoration: none; color: var(--accent); }
+@media (hover: hover) { header h1 .brand:hover { text-decoration: none; color: var(--accent); } }
 header h1 .brand-logo {
   width: 28px;
   height: 28px;
@@ -59,20 +83,38 @@ header nav a {
   text-decoration: none;
   transition: background .18s var(--ease), color .18s var(--ease);
 }
-header nav a:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, .05);
-  text-decoration: none;
+@media (hover: hover) {
+  header nav a:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, .05);
+    text-decoration: none;
+  }
 }
 header nav a[aria-current="page"] {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
+/* Nav links are text-sized (~34px tall) by default — well under the 44px
+   touch-target minimum. Center the same text in a taller tap area on touch
+   rather than growing the visible padding (which would also puff up the
+   desktop nav). */
+@media (pointer: coarse) {
+  header nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
 main {
   width: min(1280px, 100%);
   max-width: 1280px;
   margin: 0 auto;
-  padding: 1.4rem clamp(.75rem, 2vw, 1.4rem) 2.5rem;
+  /* Right/left pad out to the safe area for landscape notch clearance;
+     bottom pads out to the safe area for the home-indicator strip. */
+  padding-top: 1.4rem;
+  padding-right: max(clamp(.75rem, 2vw, 1.4rem), env(safe-area-inset-right));
+  padding-bottom: max(2.5rem, env(safe-area-inset-bottom));
+  padding-left: max(clamp(.75rem, 2vw, 1.4rem), env(safe-area-inset-left));
   animation: fadeUp .45s var(--ease) both;
 }
 @keyframes fadeUp {
@@ -87,7 +129,7 @@ main {
   margin-bottom: 1.2rem;
   transition: border-color .2s var(--ease), box-shadow .25s var(--ease), transform .25s var(--ease);
 }
-.panel:hover { border-color: color-mix(in srgb, var(--border) 70%, var(--accent)); }
+@media (hover: hover) { .panel:hover { border-color: color-mix(in srgb, var(--border) 70%, var(--accent)); } }
 .panel h2 { margin: 0 0 .8rem; font-size: 1rem; }
 .panel-header {
   display: flex;
@@ -119,11 +161,6 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(124, 92, 255, .22);
 }
-/* iOS Safari zooms in on focus for any field under 16px. Bump form fields to
-   16px on small screens so focusing the card-name box doesn't zoom the page. */
-@media (max-width: 640px) {
-  input, select, textarea { font-size: 16px; }
-}
 textarea {
   min-height: 5rem;
   font-family: ui-monospace, monospace;
@@ -131,6 +168,18 @@ textarea {
   resize: vertical;
 }
 textarea.plain { font-family: inherit; }
+/* iOS Safari zooms in on focus for any field under 16px. Bump form fields to
+   16px whenever the field could actually be focused on iOS: narrow desktop
+   windows (kept for the original max-width case) OR any touch-primary
+   device regardless of viewport width — pointer:coarse also covers iPhone
+   *landscape* and iPad in any orientation, both of which are wider than
+   640px and were previously missed entirely.
+   This must come after the `textarea` rule above: equal specificity (0,0,1),
+   so without the later position here `textarea`'s own font-size would win
+   at every width, including under this media query. */
+@media (max-width: 640px), (pointer: coarse) {
+  input, select, textarea { font-size: 16px; }
+}
 button {
   background: var(--accent);
   border: none;
@@ -139,7 +188,7 @@ button {
   font-weight: 600;
   padding: .55rem 1rem;
 }
-button:hover { filter: brightness(1.1); }
+@media (hover: hover) { button:hover { filter: brightness(1.1); } }
 button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
 /* Anchor styled as a button — keeps HTML valid (no <a><button>> nesting). */
 a.btn {
@@ -153,20 +202,35 @@ a.btn {
   padding: .55rem 1rem;
   text-decoration: none;
   transition: filter .15s var(--ease);
+  /* This is chrome styled to look like a <button>, not a link the user might
+     want to long-press-preview or select the text of — suppress both so it
+     actually behaves like the control it's dressed as. */
+  -webkit-touch-callout: none;
+  user-select: none;
 }
-a.btn:hover { filter: brightness(1.1); text-decoration: none; }
+@media (hover: hover) { a.btn:hover { filter: brightness(1.1); text-decoration: none; } }
 .btn-ghost {
   background: #3a3d46;
   color: var(--text);
 }
-.btn-ghost:hover { filter: brightness(1.12); }
+@media (hover: hover) { .btn-ghost:hover { filter: brightness(1.12); } }
 a.btn.btn-ghost { background: #3a3d46; color: var(--text); }
 .btn-danger {
   background: transparent;
   color: var(--err);
   border: 1px solid color-mix(in srgb, var(--err) 45%, var(--border));
 }
-.btn-danger:hover { background: color-mix(in srgb, var(--err) 18%, transparent); filter: none; }
+@media (hover: hover) {
+  .btn-danger:hover { background: color-mix(in srgb, var(--err) 18%, transparent); filter: none; }
+}
+/* Buttons: real interactive controls everywhere, so this is the widest-reach
+   fix for undersized touch targets (44px HIG minimum), the double-tap-zoom
+   delay, and the default gray tap flash — grouped here since they all apply
+   to the same element set. Kept out of the base `button`/`a.btn` rules so
+   desktop's tighter, denser look is untouched. */
+@media (pointer: coarse) {
+  button, a.btn, .btn-ghost, .btn-danger { min-height: 44px; }
+}
 .btn-row {
   display: flex;
   gap: .6rem;
@@ -192,7 +256,7 @@ table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: .55rem .65rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; font-size: .8rem; }
 tr { transition: background .15s var(--ease), opacity .22s var(--ease), transform .22s var(--ease); }
-tbody tr:hover { background: rgba(255, 255, 255, .025); }
+@media (hover: hover) { tbody tr:hover { background: rgba(255, 255, 255, .025); } }
 tr.is-removing { opacity: 0; transform: translateX(12px); }
 .status {
   padding: .15rem .55rem;
@@ -229,7 +293,9 @@ img.result {
   box-shadow: var(--lift);
   transition: transform .35s var(--ease), box-shadow .35s var(--ease);
 }
-img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 0, 0, .4); }
+@media (hover: hover) {
+  img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 0, 0, .4); }
+}
 .pill {
   display: inline-block;
   padding: .12rem .5rem;
@@ -263,10 +329,12 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   transition: transform .22s var(--ease), background .22s var(--ease);
   position: relative;
 }
-.card-tile:hover {
-  text-decoration: none;
-  transform: translateY(-3px);
-  background: rgba(255, 255, 255, .03);
+@media (hover: hover) {
+  .card-tile:hover {
+    text-decoration: none;
+    transform: translateY(-3px);
+    background: rgba(255, 255, 255, .03);
+  }
 }
 /* Fixed trading-card frame — never stretch/squash art. */
 .card-frame {
@@ -291,7 +359,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   transition: box-shadow .25s var(--ease);
 }
 .card-tile .card-frame { margin: 0 auto; }
-.card-tile:hover .card-frame { box-shadow: var(--lift); }
+@media (hover: hover) { .card-tile:hover .card-frame { box-shadow: var(--lift); } }
 .card-tile .caption {
   display: block;
   font-size: .8rem;
@@ -332,10 +400,12 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   text-decoration: none;
   transition: background .18s var(--ease), border-color .18s var(--ease);
 }
-.card-list-row:hover {
-  text-decoration: none;
-  background: rgba(255, 255, 255, .03);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+@media (hover: hover) {
+  .card-list-row:hover {
+    text-decoration: none;
+    background: rgba(255, 255, 255, .03);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
 }
 .card-list-row .card-frame {
   width: 56px;
@@ -378,10 +448,12 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   text-decoration: none;
   transition: background .18s var(--ease), border-color .18s var(--ease);
 }
-.detail-row:hover {
-  text-decoration: none;
-  background: rgba(255, 255, 255, .03);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+@media (hover: hover) {
+  .detail-row:hover {
+    text-decoration: none;
+    background: rgba(255, 255, 255, .03);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
 }
 .detail-row .card-frame { width: 88px; border-radius: 6px; }
 .detail-body { min-width: 0; display: grid; gap: .2rem; }
@@ -488,7 +560,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 /* Long (e.g. Japanese) set names wrap inside the fixed-width panel. */
 .fp-name { overflow-wrap: anywhere; word-break: break-word; }
 .fp-name a { color: var(--text); text-decoration: none; }
-.fp-name a:hover { color: var(--accent); }
+@media (hover: hover) { .fp-name a:hover { color: var(--accent); } }
 .fp-table tr + tr td { border-top: 1px solid rgba(255, 255, 255, .05); }
 .fp-table .is-current {
   background: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -502,7 +574,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   color: var(--accent);
   text-decoration: none;
 }
-.fp-all:hover { text-decoration: underline; }
+@media (hover: hover) { .fp-all:hover { text-decoration: underline; } }
 
 @media (max-width: 960px) {
   .full-row { grid-template-columns: 240px minmax(0, 1fr); }
@@ -531,9 +603,9 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
 }
 .checklist .num { text-align: right; font-variant-numeric: tabular-nums; }
 .checklist-row { cursor: pointer; }
-.checklist-row:hover { background: rgba(255, 255, 255, .035); }
+@media (hover: hover) { .checklist-row:hover { background: rgba(255, 255, 255, .035); } }
 .checklist .c-name a { color: var(--text); text-decoration: none; font-weight: 600; }
-.checklist .c-name a:hover { color: var(--accent); }
+@media (hover: hover) { .checklist .c-name a:hover { color: var(--accent); } }
 .checklist .c-cost {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: .05em;
@@ -576,9 +648,11 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   border: 1px solid var(--border);
   background: transparent;
 }
-.gallery-chips .pill:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+@media (hover: hover) {
+  .gallery-chips .pill:hover {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  }
 }
 .gallery-chips .pill-active {
   color: var(--text);
@@ -603,8 +677,10 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   font-weight: 600;
   padding: .55rem 1rem;
   border-radius: 6px;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
-.pager-btn:hover { filter: brightness(1.1); }
+@media (hover: hover) { .pager-btn:hover { filter: brightness(1.1); } }
 .pager-btn--ghost {
   background: #3a3d46;
   color: var(--text);
@@ -626,10 +702,15 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   font-weight: 600;
   font-size: .85rem;
 }
-.pager-num:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  text-decoration: none;
+@media (hover: hover) {
+  .pager-num:hover {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    text-decoration: none;
+  }
+}
+@media (pointer: coarse) {
+  .pager-num { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
 .pager-num--current {
   color: #fff;
@@ -684,7 +765,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   border-radius: 0;
   box-shadow: none;
 }
-.card-detail-image img.result:hover { transform: none; box-shadow: none; }
+@media (hover: hover) { .card-detail-image img.result:hover { transform: none; box-shadow: none; } }
 
 .gallery-toolbar {
   display: flex;
@@ -706,6 +787,13 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   padding: .35rem .5rem;
   font-size: .85rem;
 }
+/* Placed after (and thus overriding) the rule above: same specificity as the
+   shared touch-font-size fix near the top of the file, but that one loses on
+   source order to this more specific .gallery-toolbar select selector
+   without a local override. */
+@media (max-width: 640px), (pointer: coarse) {
+  .gallery-toolbar select { font-size: 16px; }
+}
 .view-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -724,21 +812,28 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 .view-toggle a + a,
 .view-toggle button + button {
   border-left: 1px solid var(--border);
 }
-.view-toggle a:hover,
-.view-toggle button:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, .04);
-  text-decoration: none;
-  filter: none;
+@media (hover: hover) {
+  .view-toggle a:hover,
+  .view-toggle button:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, .04);
+    text-decoration: none;
+    filter: none;
+  }
 }
 .view-toggle .is-active {
   color: #fff;
   background: color-mix(in srgb, var(--accent) 75%, #000);
+}
+@media (pointer: coarse) {
+  .view-toggle a, .view-toggle button { min-height: 44px; display: inline-flex; align-items: center; }
 }
 
 /* Card popover modal — must be a direct body child (see base.html). */
@@ -754,7 +849,13 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
      keeps the header still and lets content grow downward. */
   align-items: flex-start;
   justify-content: center;
-  padding: clamp(1rem, 6vh, 4.5rem) 1rem 1rem;
+  /* A fixed, inset:0 overlay sits directly under the notch/status-bar and
+     above the home indicator once viewport-fit=cover is active — max()
+     keeps the original spacing where there's no safe area to clear. */
+  padding: max(clamp(1rem, 6vh, 4.5rem), env(safe-area-inset-top))
+           max(1rem, env(safe-area-inset-right))
+           max(1rem, env(safe-area-inset-bottom))
+           max(1rem, env(safe-area-inset-left));
   pointer-events: none;
 }
 .card-modal-backdrop {
@@ -769,9 +870,18 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   position: relative;
   z-index: 1;
   width: min(920px, 100%);
-  /* Leave room for the top offset + bottom gap so tall cards stay on-screen. */
+  /* Leave room for the top offset + bottom gap so tall cards stay on-screen.
+     100vh is a fallback for browsers without dvh; iOS's 100vh includes the
+     collapsed-URL-bar zone, so the dvh line (which wins when supported)
+     tracks the actually-visible height instead. */
   max-height: calc(100vh - clamp(2rem, 12vh, 5.5rem));
+  max-height: calc(100dvh - clamp(2rem, 12vh, 5.5rem));
   overflow: auto;
+  /* This dialog is the modal's own scroll container — without containment,
+     scrolling past its top/bottom can rubber-band into scrolling the page
+     behind it (already scroll-locked via body.modal-open, but chaining can
+     still visually leak on iOS). */
+  overscroll-behavior-y: contain;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -799,6 +909,7 @@ img.result:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(0, 
   background: #3a3d46;
   color: var(--text);
 }
+@media (pointer: coarse) { .card-modal-close { min-height: 44px; } }
 .card-modal-body {
   display: grid;
   grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
@@ -848,10 +959,18 @@ body.modal-open { overflow: hidden; }
   font-weight: 500;
   cursor: pointer;
 }
-.typeahead-item:hover,
+/* .is-active is a keyboard/JS state class (arrow-key navigation), not a
+   pointer state — it must always apply, so it's kept out of the hover-only
+   media query below rather than sharing a rule with :hover. */
 .typeahead-item.is-active {
   background: rgba(124, 92, 255, .16);
   filter: none;
+}
+@media (hover: hover) {
+  .typeahead-item:hover {
+    background: rgba(124, 92, 255, .16);
+    filter: none;
+  }
 }
 .typeahead-thumb {
   width: 42px;
@@ -951,7 +1070,7 @@ body.modal-open { overflow: hidden; }
   box-shadow: none;
   background: #12131a;
 }
-.preview-img:hover { transform: none; box-shadow: none; }
+@media (hover: hover) { .preview-img:hover { transform: none; box-shadow: none; } }
 .preview-img:not([src]),
 .preview-img[src=""] { display: none; }
 .preview-placeholder {
@@ -1120,6 +1239,9 @@ body.modal-open { overflow: hidden; }
 }
 .job-actions { display: flex; gap: .45rem; flex-wrap: wrap; justify-content: flex-end; }
 .job-actions a, .job-actions button { font-size: .8rem; padding: .35rem .55rem; }
+@media (pointer: coarse) {
+  .job-actions a, .job-actions button { min-height: 44px; display: inline-flex; align-items: center; }
+}
 
 /* Jobs table: avoid horizontal blowout on narrow */
 .panel:has(table) { overflow-x: auto; }
@@ -1158,7 +1280,7 @@ body.modal-open { overflow: hidden; }
   font-weight: 600;
   cursor: pointer;
 }
-.job-chip:hover { filter: brightness(1.1); }
+@media (hover: hover) { .job-chip:hover { filter: brightness(1.1); } }
 .job-chip.is-running {
   background: color-mix(in srgb, var(--accent) 28%, #3a3d46);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
@@ -1217,7 +1339,7 @@ body.modal-open { overflow: hidden; }
   display: flex; flex-direction: column; align-items: center; gap: .2rem;
   font-size: .68rem; text-align: center;
 }
-.print-tile:hover { border-color: var(--border); background: rgba(255,255,255,.04); }
+@media (hover: hover) { .print-tile:hover { border-color: var(--border); background: rgba(255,255,255,.04); } }
 .print-tile.is-current { border-color: var(--accent); color: var(--text); }
 .print-tile img { width: 100%; border-radius: 4.75% / 3.5%; background: #3a3d46; }
 .cache-log {
@@ -1265,6 +1387,10 @@ body.modal-open { overflow: hidden; }
   background: #3a3d46;
   color: var(--text);
   cursor: pointer;
+}
+@media (pointer: coarse) {
+  /* min-* wins over the explicit (smaller) width/height above when larger. */
+  .syntax-help-btn { min-width: 44px; min-height: 44px; }
 }
 .syntax-help-btn[aria-expanded="true"] {
   background: color-mix(in srgb, var(--accent) 40%, transparent);
@@ -1366,7 +1492,7 @@ details#cached-tags[open] > .cached-tags-head { margin-bottom: .55rem; }
   text-decoration: none;
   font-weight: 600;
 }
-.cached-tag-name:hover { color: var(--accent); }
+@media (hover: hover) { .cached-tag-name:hover { color: var(--accent); } }
 .cached-tag-meta { font-size: .78rem; }
 .cached-tag-actions { margin-left: auto; display: flex; gap: .35rem; }
 .cached-tag-actions button {
@@ -1383,6 +1509,9 @@ details#cached-tags[open] > .cached-tags-head { margin-bottom: .55rem; }
   font-size: .8rem;
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--text);
+}
+@media (pointer: coarse) {
+  .cached-tag-actions button, .tag-inline-btn { min-height: 44px; }
 }
 /* Download queue list (under the cache status). */
 #cache-queue { margin: .7rem 0 .2rem; }
@@ -1435,7 +1564,8 @@ details#cached-tags[open] > .cached-tags-head { margin-bottom: .55rem; }
 }
 .cache-queue-item.is-running .cache-queue-state { color: color-mix(in srgb, var(--accent) 70%, var(--text)); font-weight: 700; }
 .cache-queue-remove { width: auto; padding: .1rem .45rem; font-size: .8rem; background: transparent; color: var(--muted); }
-.cache-queue-remove:hover { color: var(--err); }
+@media (hover: hover) { .cache-queue-remove:hover { color: var(--err); } }
+@media (pointer: coarse) { .cache-queue-remove { min-width: 44px; min-height: 44px; } }
 
 .gallery-note { margin: 0 0 .8rem; }
 .tag-note {
@@ -1472,7 +1602,13 @@ details.cache-panel-details[open] > .cache-summary { margin-bottom: .8rem; }
    Body becomes a flex column (header natural height, main fills the rest); the
    log flex-fills and scrolls internally — no magic offsets to drift. */
 body.logs-body { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
-body.logs-body main { flex: 1 1 auto; min-height: 0; padding-bottom: 1rem; display: flex; flex-direction: column; }
+body.logs-body main {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
 .logs-page {
   display: flex;
   flex-direction: column;
@@ -1485,6 +1621,10 @@ body.logs-body main { flex: 1 1 auto; min-height: 0; padding-bottom: 1rem; displ
   min-height: 6rem;
   max-height: none;
   overflow: auto;
+  /* This pane is the page's only scroll container (body itself is
+     overflow:hidden above) — contain overscroll so hitting its top/bottom
+     can't rubber-band/chain into scrolling something else. */
+  overscroll-behavior-y: contain;
 }
 .game-pills {
   display: flex;

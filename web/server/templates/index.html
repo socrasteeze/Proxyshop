@@ -27,7 +27,7 @@
       </select>
     </label>
     <label>Find a printing
-      <input id="card-search" type="search" placeholder="Start typing a card name…" autocomplete="off">
+      <input id="card-search" type="search" placeholder="Start typing a card name…" autocomplete="off" enterkeyhint="go">
     </label>
   </div>
   <div class="btn-row" style="margin-top:.7rem">
@@ -169,7 +169,7 @@
         <p class="group-title">Basics</p>
         <label>Name <input id="pkm-name" value="{% if card and game == 'pokemon' %}{{ p.name or card.name or '' }}{% endif %}"></label>
         <div class="field-row" id="pkm-hp-row">
-          <label>HP <input id="pkm-hp" value="{{ p.hp if game == 'pokemon' else '' }}"></label>
+          <label>HP <input id="pkm-hp" inputmode="numeric" value="{{ p.hp if game == 'pokemon' else '' }}"></label>
         </div>
         <div id="pkm-rules-block">
           <label>Rules text <span class="muted">(Trainers / Energy)</span>

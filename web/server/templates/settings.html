@@ -45,6 +45,20 @@
     <dt>—</dt><dd>Nothing cached yet.</dd>
     {% endfor %}
   </dl>
+
+  <h3>Browser storage</h3>
+  <p class="muted">
+    The service worker caches a handful of small static files (CSS/JS/icons)
+    for faster repeat loads — never card data or job status, which always
+    come from the live server. If a page ever looks stuck on an old version
+    after a deploy, use this instead of an ordinary reload: on an installed
+    (Home Screen) app, a plain reload can still serve files the service
+    worker cached, since it isn't the same thing as clearing Safari's cache.
+  </p>
+  <div class="settings-actions">
+    <button type="button" class="btn-ghost" id="clear-cache-btn">Clear cache &amp; reload</button>
+    <span id="clear-cache-state" class="muted"></span>
+  </div>
 </div>
 
 <script>
@@ -135,6 +149,31 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   refresh();
+
+  // Hard-refresh escape hatch (Domain 7 of the iOS PWA checklist): a bare
+  // location.reload() is not enough on an installed app, since it runs in
+  // its own storage container the browser's "clear cache" doesn't touch —
+  // this unregisters the service worker and empties Cache Storage first, so
+  // the next load can't still be served anything stale from either.
+  const clearBtn = document.getElementById('clear-cache-btn');
+  const clearState = document.getElementById('clear-cache-state');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      clearBtn.disabled = true;
+      clearState.textContent = 'Clearing…';
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if (window.caches) {
+          const names = await caches.keys();
+          await Promise.all(names.map((n) => caches.delete(n)));
+        }
+      } catch (e) { /* best-effort — still reload below */ }
+      location.reload();
+    });
+  }
 });
 </script>
 {% endblock %}

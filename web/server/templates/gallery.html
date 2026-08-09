@@ -49,9 +49,9 @@
     </label>
     <label>Card name
       <span class="label-with-help">
-        <input name="q" id="gallery-q" value="{{ q }}"
+        <input type="search" name="q" id="gallery-q" value="{{ q }}"
                placeholder="Name, or t:creature o:draw supertype:trainer…"
-               autocomplete="off"
+               autocomplete="off" enterkeyhint="search"
                aria-describedby="search-syntax-help"
                title="Type a field name (t, o, r, set…) to see the operators for this game.">
         <button type="button" class="syntax-help-btn" id="search-syntax-toggle"
@@ -78,7 +78,8 @@
         {% endfor %}
       </select>
       {% else %}
-      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="Set code (e.g. MH3)" autocomplete="off">
+      <input name="set" id="gallery-set" value="{{ set_code }}" placeholder="Set code (e.g. MH3)"
+             autocomplete="off" enterkeyhint="search">
       {% endif %}
     </label>
     <label>Sort by
@@ -476,7 +477,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (focusId) {
       sessionStorage.removeItem(FOCUS_KEY);
       const el = document.getElementById(focusId);
-      if (el) {
+      // .focus() here runs on this fresh page's DOMContentLoaded, not inside
+      // the gesture that submitted the previous page's form — iOS won't
+      // raise the keyboard for that (by design: JS can't open the keyboard
+      // outside a real user gesture). On touch that would leave a caret
+      // blinking in a field the keyboard never opens for, which reads as
+      // more broken than just not refocusing — so skip it there and let a
+      // real tap do it. Desktop has no such restriction and keeps the
+      // convenience.
+      const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      if (el && !isTouch) {
         el.focus();
         el.setSelectionRange(el.value.length, el.value.length);
       }

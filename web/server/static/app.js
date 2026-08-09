@@ -885,6 +885,51 @@ function wireCardPopover(root = document) {
   });
 }
 
+/**
+ * Keep the focused field visible when the on-screen keyboard opens.
+ *
+ * iOS doesn't reposition content on its own for a field low in a long form
+ * (the editor has 53 fields; the filter panels sit under a sticky header),
+ * so a focused field can end up entirely covered by the keyboard. The
+ * viewport meta's `interactive-widget=resizes-content` (base.html) shrinks
+ * the visual viewport when the keyboard opens rather than leaving it
+ * unchanged underneath the keyboard; visualViewport's resize event is what
+ * actually fires when that shrink happens, which is more precise than
+ * guessing a fixed delay after focus. No fixed bottom bar exists anywhere in
+ * this app (checked — none) for this listener to reposition alongside the
+ * field, so keeping the field visible is its whole job.
+ */
+function wireKeyboardAvoidance() {
+  const isFormField = (el) =>
+    el instanceof Element && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+
+  function keepFocusedVisible() {
+    const el = document.activeElement;
+    if (isFormField(el)) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', keepFocusedVisible);
+  }
+  // Also covers focus-without-resize, e.g. Tab to the next field while the
+  // keyboard is already open (no viewport resize fires in that case).
+  document.addEventListener('focus', (ev) => {
+    if (isFormField(ev.target)) keepFocusedVisible();
+  }, true); // capture: focus doesn't bubble
+}
+
+/**
+ * Register the service worker (see /static/sw.js for what it does and does
+ * not cache — deliberately just static assets, never HTML/API/images).
+ * Feature-detected: a silent no-op on browsers without SW support.
+ */
+function wireServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* best-effort */ });
+  });
+}
+
 /* Give every submit form a fresh idempotency key per page load. */
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('input[name="idempotency_key"]').forEach(inp => {
@@ -899,4 +944,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search-syntax-help'),
     document.getElementById('search-syntax-toggle'));
   wireCardPopover(document);
+  wireKeyboardAvoidance();
+  wireServiceWorker();
 });

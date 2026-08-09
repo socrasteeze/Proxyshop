@@ -10,10 +10,11 @@
       local card database.</p>
     <form class="stack" id="import-form" action="/api/decks/import" method="post">
       <label>Deck name <span class="muted">(optional)</span>
-        <input name="name" maxlength="200" placeholder="My Commander deck">
+        <input name="name" maxlength="200" placeholder="My Commander deck" enterkeyhint="next">
       </label>
       <label>Deck URL
-        <input name="url" maxlength="500" placeholder="https://moxfield.com/decks/…">
+        <input type="url" inputmode="url" name="url" maxlength="500"
+               placeholder="https://moxfield.com/decks/…" enterkeyhint="go">
       </label>
       <label>… or paste decklist text
         <textarea name="text" maxlength="100000" placeholder="4 Lightning Bolt&#10;1 Sol Ring (C21) 125&#10;&#10;Sideboard&#10;2 Duress"></textarea>
@@ -32,7 +33,7 @@
       <tbody>
         {% for d in decks %}
         <tr>
-          <td>{% if d.source_url %}<a href="{{ d.source_url }}" rel="noopener">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
+          <td>{% if d.source_url %}<a href="{{ d.source_url }}" target="_blank" rel="noopener">{{ d.name }}</a>{% else %}{{ d.name }}{% endif %}</td>
           <td>{{ d.cards }}</td>
           <td>{% if d.value_usd %}${{ '%.2f'|format(d.value_usd) }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="muted">{{ d.created_at }}</td>
@@ -50,7 +51,7 @@
     <p class="muted" id="sheet-status"></p>
     <p class="muted">“Download images” fetches high-quality card scans
       (745×1040 PNG) as a ZIP with a decklist manifest — ready for
-      <a href="https://proxxied.com/" rel="noopener">Proxxied</a> or any
+      <a href="https://proxxied.com/" target="_blank" rel="noopener">Proxxied</a> or any
       print-prep tool. “PDF sheet” is a built-in quick print layout
       (63×88&nbsp;mm, 3×3 per page, 300&nbsp;DPI, cut guides). First run
       downloads the images; later runs are instant.</p>

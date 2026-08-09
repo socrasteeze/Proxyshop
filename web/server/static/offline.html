@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Offline — Proxyshop</title>
+<link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  /* Minimal fallback styling in case app.css itself isn't cached yet —
+     this page must render something legible even then. */
+  body { font: 15px/1.5 system-ui, -apple-system, sans-serif; background: #14151a; color: #e8e9ec; }
+  .offline-wrap {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 2rem 1.2rem calc(2rem + env(safe-area-inset-bottom, 0px));
+    text-align: center;
+  }
+  .offline-wrap img { width: 64px; height: 64px; border-radius: 14px; margin-bottom: 1rem; }
+  .offline-wrap h1 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  .offline-wrap p { color: #9aa0ab; max-width: 32rem; margin: 0 auto 1.2rem; }
+</style>
+</head>
+<body>
+  <div class="offline-wrap">
+    <img src="/static/img/logo-96.png" alt="">
+    <h1>Can't reach the server</h1>
+    <p>
+      Proxyshop is self-hosted — this device needs a connection to the NAS
+      (your LAN or Tailscale tailnet) to browse cards, check job status, or
+      render anything. Reconnect and try again.
+    </p>
+    <button type="button" onclick="location.reload()">Try again</button>
+  </div>
+</body>
+</html>
