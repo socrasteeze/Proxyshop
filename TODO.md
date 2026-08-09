@@ -49,6 +49,11 @@ work is tracked upstream.
 - [ ] **No CI.** `.github/` holds only issue templates; `.pre-commit-config.yaml`
       does not run the tests. `python -m pytest web/tests` is fully offline and
       would run fine in Actions.
+- [ ] **`nas-update.sh` has no automated test.** The fetch/token branching
+      (`LOCAL_TARBALL` vs. the real GitHub path) was only verified by hand this
+      round. It's plain `/bin/sh` with no docker or network dependency in the
+      `LOCAL_TARBALL` + `DRY_RUN` combination, so a small shellcheck/bats-style
+      harness could catch a regression here without needing a real PAT.
 - [ ] Multi-worker is functional (atomic claims, per-worker capabilities) but
       the UI merges template lists from all workers — treat as experimental
       until the UI is per-worker aware.

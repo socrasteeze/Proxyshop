@@ -454,6 +454,8 @@ Notes:
   volume owner: check `ls -n /Volume1/proxyshop` and adjust
   `CONTAINER_USER` in the script.
 - Test the fetch/install path on any Linux box with `DRY_RUN=1 sh nas-update.sh`.
+  Pair it with `LOCAL_TARBALL=/path/to/app.tar.gz` to skip the GitHub fetch
+  (and the PAT check, which only runs on the fetch path) entirely.
 
 ## Part 2 — Remote access (Tailscale, recommended)
 

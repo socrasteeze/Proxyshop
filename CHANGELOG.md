@@ -65,6 +65,10 @@ Desktop Proxyshop release history continues below.
 - **Providers**: Weiß Schwarz catalog scrape repaired for the redesigned EN/JP
   endpoints; transient 5xx retries
 - Branding: use the original Proxyshop logo for the web favicon and header icon
+- **`nas-update.sh`**: the GitHub PAT check now runs only on the path that
+  fetches from GitHub, so the documented `LOCAL_TARBALL=` test hook no longer
+  demands a token it never sends; also stopped a spurious "cannot open" line
+  on every run without an optional Pokémon TCG key file
 
 ### Tools
 
